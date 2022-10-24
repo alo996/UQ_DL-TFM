@@ -1,3 +1,7 @@
 /.gitignore
 /.idea
 /.ipynb_checkpoints
+/.DS_Store
+/scripts/.__pycache__
+/mltfm/.DS_Store
+/mltfm/.__pycache__
