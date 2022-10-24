@@ -1,4 +1,4 @@
-from scripts.data_preparation import reshape
+from DL_TFM.scripts.data_preparation import reshape
 
 import copy
 import geopandas as gpd
