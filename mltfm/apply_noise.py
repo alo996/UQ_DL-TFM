@@ -2,7 +2,7 @@ import numpy as np
 import tables
 from tqdm import tqdm
 
-sigma=1e-4
+sigma=1e-3
 f = tables.open_file('displacement.h5','r')
 
 f_n = tables.open_file('displacement_noise.h5','w')
