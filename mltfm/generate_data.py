@@ -133,4 +133,4 @@ Gen = AnalyticalEventGenerator({'resolutionX':104,
                                 'nu':0.49          })
 
 count = 3000
-Gen.generate(count)
+# Gen.generate(count)
