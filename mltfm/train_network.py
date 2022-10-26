@@ -67,7 +67,7 @@ data_size = 0.8
 test_size = 0.2
 datatype = 'float32'
 u_filename = "displacement_noise.h5"
-f_filename = "tractions.h5"
+f_filename = "tractions_3000.h5"
 batch_size = 132
 f = tables.open_file(u_filename,mode='r')
 ff = tables.open_file(f_filename,mode='r')
