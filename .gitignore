@@ -6,3 +6,5 @@
 /mltfm/.DS_Store
 /mltfm/.__pycache__
 /ViT-TFM/.ipynb_checkpoints/
+/ViT-TFM/displacements_25000.h5
+/ViT-TFM/tractions_25000.h5
