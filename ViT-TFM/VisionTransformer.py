@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 
@@ -56,7 +57,7 @@ class DropPath(nn.Module):
 
 
 class PatchEmbed(nn.Module):
-    """Split image into patches and then embed them.
+    """Split displacement field into patches and embed them.
 
     Parameters
     __________
@@ -77,7 +78,7 @@ class PatchEmbed(nn.Module):
     proj : nn.Conv2d
         Convolutional layer to perform both the splitting into patches and their embedding.
     """
-    def _init__(self, dspl_size=104, patch_size=8, embed_dim=2*104):
+    def __init__(self, dspl_size=104, patch_size=8, embed_dim=2*104):
         super().__init__()
         self.dspl_size = dspl_size
         self.patch_size = patch_size
@@ -98,9 +99,13 @@ class PatchEmbed(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches, embed_dim)
         """
+        print(f"Forward call of PatchEmbed: x of shape {x.shape}")
         x = self.proj(x)  # (n_samples, embed_dim, n_patches ** 0.5, n_patches ** 0.5)
+        print(f"Forward call of PatchEmbed: After proj, x of shape {x.shape}")
         x = x.flatten(2)  # (n_samples, embed_dim, n_patches)
+        print(f"Forward call of PatchEmbed: After proj and flatten, x of shape {x.shape}")
         x = x.transpose(1, 2)  # (n_samples, n_patches, embed_dim)
+        print(f"Forward call of PatchEmbed: After proj and flatten and transpose, x of shape {x.shape}")
 
         return x
 
@@ -168,8 +173,9 @@ class Attention(nn.Module):
         n_samples, n_tokens, dim = x.shape
         if dim != self.dim:
             raise ValueError
-
+        print(f"Forward call of Attention: x of shape {x.shape}")
         qkv = self.qkv(x)  # (n_samples, n_patches, 3 * dim)
+        print(f"Forward call of Attention: x of shape {qkv.shape}")
         qkv = qkv.reshape(
             n_samples, n_tokens, 2, self.n_heads, self.head_dim
         )  # (n_samples, n_patches, 2, n_heads, head_dim)
@@ -311,7 +317,7 @@ class Block(nn.Module):
             Shape `(n_samples, n_patches, dim)`
 
         """
-        y, attn = self.attn(self.norm1)
+        y, attn = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
@@ -398,6 +404,7 @@ class VisionTransformer(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
+        self.rec_trac_head = RecTracHead(embed_dim, patch_size)
 
     def forward(self, x):
         """
@@ -411,9 +418,9 @@ class VisionTransformer(nn.Module):
         Returns
         _______
         logits : torch.Tensor
-            Logits of reconstructed traction field, shape `(n_samples, 2, dspl_size, dspl_size)`
+            Logits of encoded displacement fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
-        n_samples = x.shape[0]
+        # n_samples = x.shape[0]
         x = self.patch_embed(x)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
@@ -422,6 +429,7 @@ class VisionTransformer(nn.Module):
             x = block(x)
 
         x = self.norm(x)
+        x = self.rec_trac_head(x)
 
         return x
 
@@ -434,3 +442,31 @@ class VisionTransformer(nn.Module):
                 nn.init.constant_(m.bias, 0)
                 nn.init.constant_(m.weight, 1.0)
 
+
+class RecTracHead(nn.Module):
+    def __init__(self, in_dim, patch_size=8):
+        super().__init__()
+
+        layers = [nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, in_dim), nn.GELU()]
+
+        self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.convTrans = nn.ConvTranspose2d(
+            in_dim,
+            2,
+            kernel_size=(patch_size, patch_size),
+            stride=(patch_size, patch_size))
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_normal_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x_rec = x.transpose(1, 2)
+        out_sz = tuple((int(math.sqrt(x_rec.size()[2])), int(math.sqrt(x_rec.size()[2]))))
+        x_rec = self.convTrans(x_rec.unflatten(2, out_sz))
+
+        return x_rec
