@@ -99,13 +99,9 @@ class PatchEmbed(nn.Module):
         torch.Tensor
             Shape `(n_samples, n_patches, embed_dim)
         """
-        print(f"Forward call of PatchEmbed: x of shape {x.shape}")
         x = self.proj(x)  # (n_samples, embed_dim, n_patches ** 0.5, n_patches ** 0.5)
-        print(f"Forward call of PatchEmbed: After proj, x of shape {x.shape}")
         x = x.flatten(2)  # (n_samples, embed_dim, n_patches)
-        print(f"Forward call of PatchEmbed: After proj and flatten, x of shape {x.shape}")
         x = x.transpose(1, 2)  # (n_samples, n_patches, embed_dim)
-        print(f"Forward call of PatchEmbed: After proj and flatten and transpose, x of shape {x.shape}")
 
         return x
 
@@ -173,18 +169,17 @@ class Attention(nn.Module):
         n_samples, n_tokens, dim = x.shape
         if dim != self.dim:
             raise ValueError
-        print(f"Forward call of Attention: x of shape {x.shape}")
+
         qkv = self.qkv(x)  # (n_samples, n_patches, 3 * dim)
-        print(f"Forward call of Attention: x of shape {qkv.shape}")
         qkv = qkv.reshape(
-            n_samples, n_tokens, 2, self.n_heads, self.head_dim
-        )  # (n_samples, n_patches, 2, n_heads, head_dim)
-        qkv = qkv.permute(2, 0, 3, 1 ,4) # (2, n_samples, n_heads, n_patches, head_dim)
+            n_samples, n_tokens, 3, self.n_heads, self.head_dim
+        )  # (n_samples, n_patches, 3, n_heads, head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, n_samples, n_heads, n_patches, head_dim)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         k_t = k.transpose(-2, -1)
         dotprod = q @ k_t * self.scale  # (n_samples, n_heads, n_patches, n_patches)
-        attn = dotprod.softmax(dim=-1) # (n_samples, n_heads, n_patches, n_patches)
+        attn = dotprod.softmax(dim=-1)  # (n_samples, n_heads, n_patches, n_patches)
         attn = self.attn_drop(attn)
 
         weighted_avg = attn @ v  # (n_samples, n_heads, n_patches, head_dim)
@@ -334,7 +329,7 @@ class VisionTransformer(nn.Module):
     Parameters
     __________
     dspl_size : int
-        Height and width of sqaure displacement field.
+        Height and width of square displacement field.
 
     patch_size : int
         Height and width of patches.

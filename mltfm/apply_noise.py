@@ -3,7 +3,7 @@ import tables
 from tqdm import tqdm
 
 sigma=1e-3
-f = tables.open_file('displacements_25000.h5', 'r')
+f = tables.open_file('../ViT-TFM/displacements_25000.h5', 'r')
 
 f_n = tables.open_file('displacement_noise.h5','w')
 array_c = f_n.create_earray(f_n.root,'data',tables.Float64Atom(),(0,104,104,2))
