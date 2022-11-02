@@ -23,8 +23,8 @@ def main():
                         help='input batch size for training (default: 16)')
     parser.add_argument('--val_batch_size', type=int, default=500,
                         help='input batch size for validation (default: 500)')
-    parser.add_argument('--epochs', type=int, default=1,
-                        help='number of epochs to train (default: 1)')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='number of epochs to train (default: 100)')
     parser.add_argument('--patience', type=int, default=5,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
@@ -56,15 +56,16 @@ def main():
     cudnn.benchmark = True
 
     # Preparing dataset
-    dspl_train = h5py.File('data/displacements_25.h5')["data"]
-    trac_train = h5py.File('data/tractions_25.h5')["data"]
-    dspl_val = h5py.File('data/displacements_5.h5')["data"]
-    trac_val = h5py.File('data/tractions_5.h5')["data"]
+    dspl = h5py.File('data/displacements_25000.h5')["data"]
+    trac = h5py.File('data/tractions_25000.h5')["data"]
 
-    dspl_train = np.moveaxis(np.array(dspl_train), 3, 1)
-    trac_train = np.moveaxis(np.array(trac_train), 3, 1)
-    dspl_val = np.moveaxis(np.array(dspl_val), 3, 1)
-    trac_val = np.moveaxis(np.array(trac_val), 3, 1)
+    dspl = np.moveaxis(np.array(dspl), 3, 1)
+    trac = np.moveaxis(np.array(trac), 3, 1)
+
+    dspl_train = dspl[0:24500, :, :, :]
+    dspl_val = dspl[24500:, :, :, :]
+    trac_train = trac[0:24500, :, :, :]
+    trac_val = trac[24500:, :, :, :]
 
     X_train = torch.from_numpy(dspl_train).double()
     Y_train = torch.from_numpy(trac_train).double()
@@ -99,10 +100,8 @@ def main():
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        print("am using cuda!!")
     else:
         device = torch.device('cpu')
-        print("no cuda mehhh!!")
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
