@@ -19,10 +19,8 @@ import VisionTransformer as vit
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
-    parser.add_argument('--batch_size', type=int, default=16,
-                        help='input batch size for training (default: 16)')
-    parser.add_argument('--val_batch_size', type=int, default=500,
-                        help='input batch size for validation (default: 500)')
+    parser.add_argument('--batch_size', type=int, default=10,
+                        help='input batch size for training (default: 10)')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--patience', type=int, default=5,
@@ -55,6 +53,11 @@ def main():
     torch.cuda.manual_seed(args.seed)
     cudnn.benchmark = True
 
+    if torch.cuda.is_available() and args.use_cuda:
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
     # Preparing dataset
     dspl = h5py.File('data/displacements_25000.h5')["data"]
     trac = h5py.File('data/tractions_25000.h5')["data"]
@@ -76,9 +79,12 @@ def main():
     val_set = TensorDataset(X_val, Y_val)
     # sampler = torch.utils.data.DistributedSampler(train_set, shuffle=True)
 
-    dataloader_kwargs = {'num_workers': args.num_workers, 'pin_memory': args.use_cuda, 'shuffle': True}
-    dataloaders = {'train': DataLoader(train_set, batch_size=args.batch_size, **dataloader_kwargs),
-                   'val': DataLoader(val_set, batch_size=args.val_batch_size, **dataloader_kwargs)}
+    dataloader_kwargs = {'batch_size': args.batch_size,
+                         'num_workers': args.num_workers,
+                         'pin_memory': str(device) == 'cuda',
+                         'shuffle': True}
+    dataloaders = {'train': DataLoader(train_set, **dataloader_kwargs),
+                   'val': DataLoader(val_set, **dataloader_kwargs)}
 
     # Create model
     vit_model = vit.VisionTransformer(dspl_size=104,
@@ -98,11 +104,6 @@ def main():
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # amp_scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
 
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    else:
-        device = torch.device('cpu')
-
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
     fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.batch_size, args.patience)
@@ -110,7 +111,7 @@ def main():
 
 
 def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience):
-    best_val_rmse = np.inf
+    best_val_loss = np.inf
     best_epoch = -1
     best_model_weights = {}
     optimizer_state_dict_in_best_epoch = {}
@@ -119,26 +120,26 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
     writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
-        train_loss, train_rmse = run_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, train=True)
-        val_loss, val_rmse = run_epoch(model, loss_fn, dataloaders['val'], device, epoch, optimizer=None, train=False)
+        train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, train=True)
+        val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch, optimizer=None, train=False)
         print(
-            f"Epoch {epoch}/{max_epochs}, train_loss: {train_loss}, train_rmse: {train_rmse:.3f}")
+            f"Epoch {epoch}/{max_epochs}, train_loss: {train_loss}")
 
         writer.add_scalar('train_loss', train_loss, epoch)
-        writer.add_scalar('train_rmse', train_rmse, epoch)
         writer.add_scalar('val_loss', val_loss, epoch)
-        writer.add_scalar('val_rmse', val_rmse, epoch)
 
         # Save best weights
-        if val_rmse < best_val_rmse:
-            best_val_rmse = val_rmse
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_epoch = epoch
             best_model_weights = copy.deepcopy(model.state_dict())
             optimizer_state_dict_in_best_epoch = copy.deepcopy(optimizer.state_dict())
 
         # Early stopping
         print(
-            f"best_val_rmse: {np.round(best_val_rmse, 6)}, epoch: {epoch}, best_epoch: {best_epoch}, current_patience: {patience - (epoch - best_epoch)}")
+            f"best_val_loss: {np.round(best_val_loss, 6)}, "
+            f"epoch: {epoch}, best_epoch: {best_epoch}, "
+            f"current_patience: {patience - (epoch - best_epoch)}")
         if epoch - best_epoch >= patience:
             break
 
@@ -146,9 +147,9 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         'best_epoch': best_epoch,
         'best_model_weights': best_model_weights,
         'optimizer_state_dict_in_best_epoch': optimizer_state_dict_in_best_epoch,
-        'best_val_rmse': best_val_rmse
+        'best_val_loss': best_val_loss
     },
-        f'logs_and_weights/{NAME}/{NAME}_best_val_rmse_{np.round(best_val_rmse, 6)}.pth')
+        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 6)}.pth')
 
 
 def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
@@ -186,10 +187,9 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
             epoch_loss += loss.item()
 
         epoch_loss /= len(dataloader.dataset)
-        epoch_rmse = np.sqrt(2 * epoch_loss)
         tepoch.set_postfix(loss=epoch_loss)
         sleep(0.01)
-    return epoch_loss, epoch_rmse
+    return epoch_loss
 
 
 def init_distributed_model(args):
