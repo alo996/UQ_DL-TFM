@@ -294,7 +294,7 @@ class Block(nn.Module):
         self.mlp = MLP(in_features=dim, hidden_features=hidden_features, out_features=dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
-    def forward(self, x, return_attention=False):
+    def forward(self, x):
         """
         Run forward pass.
 
@@ -315,11 +315,8 @@ class Block(nn.Module):
         y, attn = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-
-        if return_attention:
-            return x, attn
-        else:
-            return x
+        print(f"forward call of block-method: x.shape == {x.shape}, attn.shape == {attn.shape}")
+        return x, attn
 
 
 class VisionTransformer(nn.Module):
@@ -420,13 +417,14 @@ class VisionTransformer(nn.Module):
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
 
+        attn_scores = []
         for block in self.blocks:
-            x = block(x)
-
+            x, attn = block(x)
+            attn_scores.append(attn)
         x = self.norm(x)
         x = self.rec_trac_head(x)
 
-        return x
+        return x, attn_scores
 
     def _init_weight(self, m):
         if isinstance(m, nn.Linear):

@@ -152,7 +152,7 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 6)}.pth')
 
 
-def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
+def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visualize_attn=False):
     # Set model to training mode
     if train:
         model.train()
@@ -173,8 +173,14 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
                 optimizer.zero_grad(set_to_none=True)
 
             # forward
+            pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
+            if not train and visualize_attn:
+                with torch.set_grad_enabled(not train):
+                    attn_mat = torch.stack(attn_scores) # attn_mat.shape==(depth, samples, n_heads, n_patches**0.5, n_patches**0.5)
+                    attn_mat = attn_mat.squeeze(1) # shape remains unchanged unless samples==1, then: (depth, n_heads, n_patches**0.5, n_patches**0.5)
+                    attn_mat = torch.mean(attn_mat, dim=1) # if samples==1: attn_mat.shape==(depth, n_patches**0.5,n_patches**0.5)
+
             with torch.set_grad_enabled(train):
-                pred = model(xb)
                 loss = loss_fn(pred, yb)
 
                 # backward + optimize if in training phase
