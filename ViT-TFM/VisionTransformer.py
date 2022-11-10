@@ -180,6 +180,7 @@ class Attention(nn.Module):
         k_t = k.transpose(-2, -1)
         dotprod = q @ k_t * self.scale  # (n_samples, n_heads, n_patches, n_patches)
         attn = dotprod.softmax(dim=-1)  # (n_samples, n_heads, n_patches, n_patches)
+
         attn = self.attn_drop(attn)
 
         weighted_avg = attn @ v  # (n_samples, n_heads, n_patches, head_dim)
@@ -315,7 +316,6 @@ class Block(nn.Module):
         y, attn = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-        print(f"forward call of block-method: x.shape == {x.shape}, attn.shape == {attn.shape}")
         return x, attn
 
 
