@@ -421,6 +421,7 @@ class VisionTransformer(nn.Module):
         for block in self.blocks:
             x, attn = block(x)
             attn_scores.append(attn)
+
         x = self.norm(x)
         x = self.rec_trac_head(x)
 
