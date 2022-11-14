@@ -21,8 +21,8 @@ def main():
     parser = argparse.ArgumentParser(description='TFM-ViT')
     parser.add_argument('--batch_size', type=int, default=10,
                         help='input batch size for training (default: 10)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='number of epochs to train (default: 100)')
+    parser.add_argument('--epochs', type=int, default=20,
+                        help='number of epochs to train (default: 20)')
     parser.add_argument('--patience', type=int, default=5,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
@@ -106,7 +106,7 @@ def main():
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.batch_size, args.patience)
+    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience)
     writer.close()
 
 
@@ -196,6 +196,15 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visua
         tepoch.set_postfix(loss=epoch_loss)
         sleep(0.01)
     return epoch_loss
+
+
+def inference_with_dropout(model, inputs):
+    model.eval()
+    for m in model.modules():
+        if m.__class__.__name__.startswith('Dropout'):
+            m.train()
+
+    return model(inputs)
 
 
 def init_distributed_model(args):

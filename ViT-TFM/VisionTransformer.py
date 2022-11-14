@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 
-def drop_path(x, drop_p=0., training=False):
+def drop_path(x, drop_p=0.1, training=False):
     """
     Stochastic depth: Drop paths per sample (when applied in main path of residual blocks.)
 
@@ -48,7 +48,7 @@ class DropPath(nn.Module):
     drop_p : float
         Probability to drop sample from batch, thereby mimicking stochastic depth.
     """
-    def __init__(self, drop_p=0.):
+    def __init__(self, drop_p=0.1):
         super().__init__()
         self.drop_p = drop_p
 
@@ -141,7 +141,7 @@ class Attention(nn.Module):
     attn_drop, proj_drop : nn.Dropout
         Dropout layers.
     """
-    def __init__(self, dim, n_heads, qkv_bias=True, attn_p=0., proj_p=0.):
+    def __init__(self, dim, n_heads, qkv_bias=True, attn_p=0.1, proj_p=0.1):
         super().__init__()
         self.n_heads = n_heads
         self.dim = dim
@@ -224,7 +224,7 @@ class MLP(nn.Module):
     drop : nn.Droput
         Dropout layer.
     """
-    def __init__(self, in_features, hidden_features, out_features, p=0.):
+    def __init__(self, in_features, hidden_features, out_features, p=0.1):
         super().__init__()
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = nn.GELU()
@@ -286,7 +286,7 @@ class Block(nn.Module):
     mlp : MLP
         MLP module.
     """
-    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0., attn_p=0., drop_path=0.):
+    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0.1, attn_p=0.1, drop_path=0.1):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = Attention(dim, n_heads=n_heads, qkv_bias=qkv_bias, attn_p=attn_p, proj_p=p)
@@ -367,13 +367,13 @@ class VisionTransformer(nn.Module):
             self,
             dspl_size=104,
             patch_size=8,
-            embed_dim=2*104,
+            embed_dim=128,
             depth=12,
-            n_heads=12,
+            n_heads=8,
             mlp_ratio=4.,
             qkv_bias=True,
-            p=0.,
-            attn_p=0,
+            p=0.1,
+            attn_p=0.1,
             drop_path=0.1
     ):
         super().__init__()
@@ -412,7 +412,6 @@ class VisionTransformer(nn.Module):
         logits : torch.Tensor
             Logits of encoded displacement fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
-        # n_samples = x.shape[0]
         x = self.patch_embed(x)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
