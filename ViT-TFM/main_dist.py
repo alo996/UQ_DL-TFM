@@ -58,6 +58,8 @@ def main():
     else:
         device = torch.device('cpu')
 
+    device = torch.device('cpu')
+
     # Preparing dataset
     dspl = h5py.File('data/displacements_25000.h5')["data"]
     trac = h5py.File('data/tractions_25000.h5')["data"]
@@ -198,13 +200,15 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visua
     return epoch_loss
 
 
-def inference_with_dropout(model, inputs):
+def inference_with_dropout(model, inputs, return_attn_scores=True):
     model.eval()
     for m in model.modules():
         if m.__class__.__name__.startswith('Dropout'):
             m.train()
-
-    return model(inputs)
+    if return_attn_scores:
+        return model(inputs)
+    else:
+        return model(inputs, return_attn_scores=False)
 
 
 def init_distributed_model(args):

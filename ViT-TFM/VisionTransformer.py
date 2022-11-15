@@ -374,7 +374,7 @@ class VisionTransformer(nn.Module):
             qkv_bias=True,
             p=0.1,
             attn_p=0.1,
-            drop_path=0.1
+            drop_path=0.1,
     ):
         super().__init__()
         self.patch_embed = PatchEmbed(dspl_size, patch_size, embed_dim)
@@ -398,7 +398,7 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
         self.rec_trac_head = RecTracHead(embed_dim, patch_size)
 
-    def forward(self, x):
+    def forward(self, x, return_attn_scores=True):
         """
         Run forward pass.
 
@@ -407,10 +407,13 @@ class VisionTransformer(nn.Module):
         x : torch.Tensor
             Shape `(n_samples, 2, dspl_size, dspl_size)`
 
+        return_attn_scores : Bool
+            Whether to return the list of raw attention tensors.
+
         Returns
         _______
         logits : torch.Tensor
-            Logits of encoded displacement fields, shape `(n_samples, 2, dspl_size, dspl_size)`
+            Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
         x = self.patch_embed(x)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
@@ -422,9 +425,12 @@ class VisionTransformer(nn.Module):
             attn_scores.append(attn)
 
         x = self.norm(x)
-        x = self.rec_trac_head(x)
+        logits = self.rec_trac_head(x)
 
-        return x, attn_scores
+        if return_attn_scores:
+            return logits, attn_scores
+        else:
+            return logits
 
     def _init_weight(self, m):
         if isinstance(m, nn.Linear):
