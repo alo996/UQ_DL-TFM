@@ -9,20 +9,36 @@ import h5py
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import VisionTransformer as vit
 
+class WarmupLinearSchedule(LambdaLR):
+    """ Linear warmup and then linear decay.
+        Linearly increases learning rate from 0 to 1 over `warmup_steps` training steps.
+        Linearly decreases learning rate from 1. to 0. over remaining `t_total - warmup_steps` steps.
+    """
+    def __init__(self, optimizer, warmup_steps, t_total, last_epoch=-1):
+        self.warmup_steps = warmup_steps
+        self.t_total = t_total
+        super(WarmupLinearSchedule, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
+
+    def lr_lambda(self, step):
+        if step < self.warmup_steps:
+            return float(step) / float(max(1, self.warmup_steps))
+        return max(0.0, float(self.t_total - step) / float(max(1.0, self.t_total - self.warmup_steps)))
+
 
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
-    parser.add_argument('--batch_size', type=int, default=10,
+    parser.add_argument('--batch_size', type=int, default=20,
                         help='input batch size for training (default: 10)')
-    parser.add_argument('--epochs', type=int, default=20,
-                        help='number of epochs to train (default: 20)')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='number of epochs to train (default: 100)')
     parser.add_argument('--patience', type=int, default=5,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
@@ -30,8 +46,8 @@ def main():
     parser.add_argument('--dry_run', action='store_true', default=False,
                         help='quickly check a single pass')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.001,
-                        help='initial learning rate (default: 0.001)')
+    parser.add_argument('--lr', type=float, default=0.1,
+                        help='initial learning rate (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
     parser.add_argument('--use_amp', type=float, default=False,
@@ -105,14 +121,15 @@ def main():
     loss = torch.nn.MSELoss(reduction='mean')
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # amp_scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
+    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=5, t_total=args.epochs)
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience)
+    fit(vit_model, loss, scheduler, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience)
     writer.close()
 
 
-def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience):
+def fit(model, loss_fn, scheduler, dataloaders, optimizer, device, writer, NAME, max_epochs, patience):
     best_val_loss = np.inf
     best_epoch = -1
     best_model_weights = {}
@@ -122,7 +139,9 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
     writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
+        print(scheduler.get_lr()[0])
         train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, train=True)
+        scheduler.step()
         val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch, optimizer=None, train=False)
         print(
             f"Epoch {epoch}/{max_epochs}, train_loss: {train_loss}")
