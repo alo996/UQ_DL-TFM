@@ -35,11 +35,11 @@ class WarmupLinearSchedule(LambdaLR):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
-    parser.add_argument('--batch_size', type=int, default=20,
+    parser.add_argument('--batch_size', type=int, default=10,
                         help='input batch size for training (default: 10)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='number of epochs to train (default: 100)')
-    parser.add_argument('--patience', type=int, default=5,
+    parser.add_argument('--epochs', type=int, default=20,
+                        help='number of epochs to train (default: 20)')
+    parser.add_argument('--patience', type=int, default=10,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
@@ -55,7 +55,7 @@ def main():
     # Misc
     parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 1)')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=10,
                         help='Number of data loading workers per GPU (default: 4')
     parser.add_argument('--save_model', action='store_true', default=False,
                         help='For Saving the current Model')
@@ -111,9 +111,9 @@ def main():
                                       depth=12,
                                       n_heads=8,
                                       mlp_ratio=4.,
-                                      p=0.1,
-                                      attn_p=0.1,
-                                      drop_path=0.1).double()
+                                      p=0.05,
+                                      attn_p=0.05,
+                                      drop_path=0.05).double()
     n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
     # vit_model = nn.parallel.DistributedDataParallel(vit_model.cuda(), device_ids=[args.gpu])
 
@@ -121,7 +121,7 @@ def main():
     loss = torch.nn.MSELoss(reduction='mean')
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # amp_scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
-    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=5, t_total=args.epochs)
+    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=3, t_total=args.epochs)
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
