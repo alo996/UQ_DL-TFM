@@ -398,7 +398,7 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
         self.rec_trac_head = RecTracHead(embed_dim, patch_size)
 
-    def forward(self, x, return_attn_scores=True):
+    def forward(self, x, return_attn_scores=False):
         """
         Run forward pass.
 
@@ -442,12 +442,35 @@ class VisionTransformer(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
 
 
+class PretrainedVit(nn.Module):
+
+    def __init__(self, model_pretrained):
+        super(PretrainedVit, self).__init__()
+        self.patch_embed = PatchEmbed(dspl_size=104, patch_size=8, embed_dim=768)
+        self.pos_embed = nn.Parameter(torch.zeros(1, 169, 768))
+        self.transformer = model_pretrained.transformer.requires_grad_(False)
+        self.rec_trac_head = RecTracHead(in_dim=768, patch_size=8)
+
+    def forward(self, x):
+        x = self.patch_embed(x)
+        x = x + self.pos_embed
+        x = self.transformer(x)
+        x = self.rec_trac_head(x)
+        return x
+
+
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+
+
 class RecTracHead(nn.Module):
     def __init__(self, in_dim, patch_size=8):
         super().__init__()
-
         layers = [nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, in_dim), nn.GELU()]
-
         self.mlp = nn.Sequential(*layers)
         self.apply(self._init_weights)
         self.convTrans = nn.ConvTranspose2d(
