@@ -72,11 +72,11 @@ class EventGenerator:
         raise NotImplementedError
 
     def generate(self, event_num):
-        f_data_disp = tables.open_file('displacements_res_104_num_50000.h5', mode='w')
+        f_data_disp = tables.open_file('../ViT-TFM/data/displacements_25.h5', mode='w')
         atom = tables.Float64Atom()
         self.data_disp = f_data_disp.create_earray(f_data_disp.root, 'data', atom,
                                                    (0, self.params['resolutionX'], self.params['resolutionX'], 2))
-        f_data_force = tables.open_file('tractions_res_104_num_50000.h5', mode='w')
+        f_data_force = tables.open_file('../ViT-TFM/data/tractions_25.h5', mode='w')
         self.data_force = f_data_force.create_earray(f_data_force.root, 'data', atom,
                                                      (0, self.params['resolutionY'], self.params['resolutionY'], 2))
         for i in tqdm(range(event_num)):
@@ -149,5 +149,5 @@ Gen = AnalyticalEventGenerator({'resolutionX': 104,
                                 'traction_max': 500,
                                 'nu': 0.49})
 
-count = 50000
+count = 25
 Gen.generate(count)
