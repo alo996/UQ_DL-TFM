@@ -1,66 +1,57 @@
 import argparse
 import copy
 import datetime
-import os
 from datetime import datetime
 from time import sleep
 
 import h5py
 import numpy as np
-from pytorch_pretrained_vit import ViT
 import torch
 import torch.backends.cudnn as cudnn
-from torch.optim.lr_scheduler import LambdaLR
+import os
+import sys
+from pytorch_pretrained_vit import ViT
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from gc import collect
 
-import VisionTransformer as vit
-
-class WarmupLinearSchedule(LambdaLR):
-    """ Linear warmup and then linear decay.
-        Linearly increases learning rate from 0 to 1 over `warmup_steps` training steps.
-        Linearly decreases learning rate from 1. to 0. over remaining `t_total - warmup_steps` steps.
-    """
-    def __init__(self, optimizer, warmup_steps, t_total, last_epoch=-1):
-        self.warmup_steps = warmup_steps
-        self.t_total = t_total
-        super(WarmupLinearSchedule, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
-
-    def lr_lambda(self, step):
-        if step < self.warmup_steps:
-            return float(step) / float(max(1, self.warmup_steps))
-        return max(0.0, float(self.t_total - step) / float(max(1.0, self.t_total - self.warmup_steps)))
+sys.path.append(f"{os.getcwd()}/working/")
+import VisionTransformer_working as vit
 
 
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
     parser.add_argument('--use_pretrained_model', type=bool, default=False)
-    parser.add_argument('--batch_size', type=int, default=10,
-                        help='input batch size for training (default: 10)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='input batch size for training (default: 2)')
+    parser.add_argument('--epochs', type=int, default=5,
                         help='number of epochs to train (default: 20)')
-    parser.add_argument('--patience', type=int, default=30,
+    parser.add_argument('--patience', type=int, default=5,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
-    parser.add_argument('--dry_run', action='store_true', default=False,
+    parser.add_argument('--iters_to_accumulate', default=2,
+                        help='quickly check a single pass')
+    parser.add_argument('--dry_run', default=False,
                         help='quickly check a single pass')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.05,
+    parser.add_argument('--lr', type=float, default=0.001,
                         help='initial learning rate (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
-    parser.add_argument('--use_amp', type=float, default=False,
+    parser.add_argument('--use_amp', type=float, default=True,
                         help='use automatic mixed precision')
     # Misc
-    parser.add_argument('--seed', type=int, default=2,
+    parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 2)')
-    parser.add_argument('--num_workers', type=int, default=10,
+    parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers per GPU (default: 4')
     parser.add_argument('--save_model', action='store_true', default=False,
                         help='For Saving the current Model')
+    parser.add_argument('--vis_attn', type=bool, default=False,
+                        help='Whether to return attention scores or not.')
 
     args = parser.parse_args()
 
@@ -77,113 +68,194 @@ def main():
     else:
         device = torch.device('cpu')
 
-    device = torch.device('cpu')
 
-    # Preparing dataset
+    # Prepare training and validation dataset.
     dspl = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/displacements_res_104_num_50000.h5')["data"]
     trac = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/tractions_res_104_num_50000.h5')["data"]
 
     dspl = np.moveaxis(np.array(dspl), 3, 1)
     trac = np.moveaxis(np.array(trac), 3, 1)
 
-    dspl_train = dspl[0:100, :, :, :]
-    dspl_val = dspl[100:120, :, :, :]
-    trac_train = trac[0:100, :, :, :]
-    trac_val = trac[100:120, :, :, :]
+    dspl_train = dspl[0:25000, :, :, :]
+    dspl_val = dspl[25000:26000, :, :, :]
+    trac_train = trac[0:25000, :, :, :]
+    trac_val = trac[25000:26000, :, :, :]
 
-    X_train = torch.from_numpy(dspl_train).float()
-    Y_train = torch.from_numpy(trac_train).float()
-    X_val = torch.from_numpy(dspl_val).float()
-    Y_val = torch.from_numpy(trac_val).float()
+    if args.use_amp:
+        X_train = torch.from_numpy(dspl_train).float()
+        Y_train = torch.from_numpy(trac_train).float()
+        X_val = torch.from_numpy(dspl_val).float()
+        Y_val = torch.from_numpy(trac_val).float()
+        vit_model = vit.VisionTransformer(dspl_size=104, patch_size=8, embed_dim=128, depth=12, n_heads=8, mlp_ratio=4.,
+                                          p=0.1, attn_p=0., drop_path=0.).float()
+
+    else:
+        X_train = torch.from_numpy(dspl_train).double()
+        Y_train = torch.from_numpy(trac_train).double()
+        X_val = torch.from_numpy(dspl_val).double()
+        Y_val = torch.from_numpy(trac_val).double()
+        vit_model = vit.VisionTransformer(dspl_size=104, patch_size=8, embed_dim=128, depth=12, n_heads=8, mlp_ratio=4.,
+                                          p=0., attn_p=0., drop_path=0.).double()
+
+    # vit_model.apply(init_weights)
+    n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
+    print(f"number of parameters in vit: {n_params}")
 
     train_set = TensorDataset(X_train, Y_train)
     val_set = TensorDataset(X_val, Y_val)
-    # sampler = torch.utils.data.DistributedSampler(train_set, shuffle=True)
 
-    dataloader_kwargs = {'batch_size': args.batch_size,
-                         'num_workers': args.num_workers,
-                         'pin_memory': str(device) == 'cuda',
-                         'shuffle': True}
-    dataloaders = {'train': DataLoader(train_set, **dataloader_kwargs),
-                   'val': DataLoader(val_set, **dataloader_kwargs)}
+    dataloader_kwargs = {
+        'batch_size': args.batch_size,
+        'num_workers': args.num_workers,
+        'pin_memory': str(device) == 'cuda'}
+    dataloaders = {
+        'train': DataLoader(train_set, shuffle=True, **dataloader_kwargs),
+        'val': DataLoader(val_set, shuffle=False, **dataloader_kwargs)}
+
     # Create model
-    if args.use_pretrained_model:
-        model_pretrained = ViT(name='B_16_imagenet1k', pretrained=True, in_channels=2, num_classes=10).float()
-        vit_model = vit.PretrainedVit(model_pretrained=model_pretrained)
-    else:
-        vit_model = vit.VisionTransformer(dspl_size=104,
-                                          patch_size=8,
-                                          embed_dim=128,
-                                          depth=12,
-                                          n_heads=8,
-                                          mlp_ratio=4.,
-                                          p=0.05,
-                                          attn_p=0.,
-                                          drop_path=0.).float()
-    n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
-    # vit_model = nn.parallel.DistributedDataParallel(vit_model.cuda(), device_ids=[args.gpu])
+    #if args.use_pretrained_model:
+    #    model_pretrained = ViT(name='B_16_imagenet1k', pretrained=True, in_channels=2, num_classes=10).float()
+    #   vit_model = vit.PretrainedVit(model_pretrained=model_pretrained)
 
     # Loss and optimizer
     loss = torch.nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # amp_scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
-    # scheduler = WarmupLinearSchedule(optimizer, warmup_steps=3, t_total=args.epochs)
+    optimizer = torch.optim.Adam(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5, last_epoch=-1)
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience)
+    collect()
+    torch.cuda.empty_cache()
+    print(f"device is {str(device)}")
+    print(f"batch_size is {args.batch_size}")
+    print(f"use_amp is {args.use_amp}")
+    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, args.iters_to_accumulate, args.use_amp, scheduler, vis_attn=args.vis_attn)
     writer.close()
 
 
-def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience):
+def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience, iters_to_accumulate, use_amp, scheduler=None, vis_attn=False):
     best_val_loss = np.inf
     best_epoch = -1
     best_model_weights = {}
+    train_loss = np.inf
     optimizer_state_dict_in_best_epoch = {}
-    model.to(device)
+    model = model.to(device)
+
+    # Create Tensorboard graph
+    model.eval()
     example_input, example_value = next(iter(dataloaders['train']))
     writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
-        train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, train=True)
-        val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch, optimizer=None, train=False)
-        print(
-            f"Epoch {epoch}/{max_epochs}, train_loss: {train_loss}")
+        train_loss = run_train_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, iters_to_accumulate, use_amp)
+        val_loss = run_inference_epoch(model, loss_fn, dataloaders['val'], device, epoch, use_amp, vis_attn=vis_attn)
+        if scheduler is not None:
+            scheduler.step()
 
         writer.add_scalar('train_loss', train_loss, epoch)
         writer.add_scalar('val_loss', val_loss, epoch)
 
-        # Save best weights
+        # Save best weights.
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
             best_model_weights = copy.deepcopy(model.state_dict())
             optimizer_state_dict_in_best_epoch = copy.deepcopy(optimizer.state_dict())
 
-        # Early stopping
+        # Early stopping.
         print(
-            f"best_val_loss: {np.round(best_val_loss, 6)}, "
-            f"epoch: {epoch}, best_epoch: {best_epoch}, "
+            '\n'
+            f"Epoch: {epoch}/{max_epochs}" '\n'
+            f"train loss: {np.round(train_loss, 12)}" '\n'
+            f"best_val_loss: {np.round(best_val_loss, 12)}" '\n'
+            f"epoch: {epoch}, best_epoch: {best_epoch}" '\n'
             f"current_patience: {patience - (epoch - best_epoch)}")
         if epoch - best_epoch >= patience:
             break
 
+    last_model_weights = copy.deepcopy(model.state_dict())
+
     torch.save({
         'best_epoch': best_epoch,
         'best_model_weights': best_model_weights,
+        'last_model_weights': last_model_weights,
         'optimizer_state_dict_in_best_epoch': optimizer_state_dict_in_best_epoch,
+        'loss': train_loss,
         'best_val_loss': best_val_loss
     },
-        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 6)}.pth')
+        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 10)}.pth')
 
 
-def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visualize_attn=False):
-    # Set model to training mode
-    if train:
-        model.train()
-    else:
-        model.eval()
+def run_train_epoch(model, loss_fn, dataloader, device, epoch, optimizer, iters_to_accumulate, use_amp):
+    model.train()
+    # Reset the gradients to None.
+    epoch_loss = 0.0
 
+    if str(device) == 'cuda':
+        print("using cuda")
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        with tqdm(dataloader, unit="batch") as tepoch:
+            for i, (xb, yb) in enumerate(tepoch):
+                tepoch.set_description(f"Epoch {epoch}")
+
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+                    output = model(xb)
+                    loss = loss_fn(output, yb)
+                    loss = loss / iters_to_accumulate
+
+                # Accumulates scaled gradients.
+                scaler.scale(loss).backward()
+
+                if (i+1) % iters_to_accumulate == 0 or (i+1) == len(dataloader):
+                    # Gradient clipping.
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=4.0, norm_type=2)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+
+                # statistics
+                epoch_loss += loss.item()
+
+            epoch_loss /= len(dataloader.dataset)
+            tepoch.set_postfix(loss=epoch_loss)
+            sleep(0.01)
+
+    elif str(device) == 'cpu':
+        with tqdm(dataloader, unit="batch") as tepoch:
+            for i, (xb, yb) in enumerate(tepoch):
+                tepoch.set_description(f"Epoch {epoch}")
+
+                optimizer.zero_grad(set_to_none=True)
+
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+
+                with torch.autocast(device_type='cpu', enabled=use_amp):
+                    output = model(xb)
+                    loss = loss_fn(output, yb)
+
+                # Gradient clipping.
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=4.0, norm_type=2)
+                optimizer.step()
+
+                # statistics
+                epoch_loss += loss.item()
+
+            epoch_loss /= len(dataloader.dataset)
+            tepoch.set_postfix(loss=epoch_loss)
+            sleep(0.01)
+
+    return epoch_loss
+
+
+def run_inference_epoch(model, loss_fn, dataloader, device, epoch, use_amp, vis_attn):
+    # Set model to evaluation mode.
+    model.eval()
     epoch_loss = 0.0
 
     with tqdm(dataloader, unit="batch") as tepoch:
@@ -191,40 +263,52 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visua
         for xb, yb in tepoch:
             tepoch.set_description(f"Epoch {epoch}")
 
-            xb, yb = xb.to(device), yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
 
-            # zero the parameters
-            if train:
-                optimizer.zero_grad(set_to_none=True)
+            if str(device) == 'cuda':
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+                    if vis_attn:
+                        pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth], wrong at the moment!
+                        assert pred.dtype is torch.float16
+                    else:
+                        pred = model(xb)
+                        if use_amp:
+                            assert pred.dtype is torch.float16
+                        else:
+                            assert pred.dtype is torch.double
+                    loss = loss_fn(pred, yb)
+                    if use_amp:
+                        assert loss.dtype is torch.float32
+                    else:
+                        assert loss.dtype is torch.double
 
-            # forward
-            if visualize_attn:
-                pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
-            else:
-                pred = model(xb)
-            if not train and visualize_attn:
-                with torch.set_grad_enabled(not train):
-                    attn_mat = torch.stack(attn_scores) # attn_mat.shape==(depth, samples, n_heads, n_patches**0.5, n_patches**0.5)
-                    attn_mat = attn_mat.squeeze(1) # shape remains unchanged unless samples==1, then: (depth, n_heads, n_patches**0.5, n_patches**0.5)
-                    attn_mat = torch.mean(attn_mat, dim=1) # if samples==1: attn_mat.shape==(depth, n_patches**0.5,n_patches**0.5)
+            elif str(device) == 'cpu':
+                with torch.autocast(device_type='cpu', enabled=use_amp):
+                    if vis_attn:
+                        pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
+                        if use_amp:
+                            assert pred.dtype is torch.bfloat16
+                        else:
+                            assert pred.dtype is torch.double
+                    else:
+                        pred = model(xb)
+                        if use_amp:
+                            assert pred.dtype is torch.bfloat16
+                        else:
+                            assert pred.dtype is torch.double
+                    loss = loss_fn(pred, yb)
+                    if use_amp:
+                        assert loss.dtype is torch.float32
+                    else:
+                        assert loss.dtype is torch.double
 
-            with torch.set_grad_enabled(train):
-                print(pred.shape)
-                print(pred.shape)
-                loss = loss_fn(pred, yb)
-
-                # backward + optimize if in training phase
-                if train:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
-                    optimizer.step()
-
-            # statistics
             epoch_loss += loss.item()
 
-        epoch_loss /= len(dataloader.dataset)
-        tepoch.set_postfix(loss=epoch_loss)
-        sleep(0.01)
+    epoch_loss /= len(dataloader.dataset)
+    tepoch.set_postfix(loss=epoch_loss)
+    sleep(0.01)
+
     return epoch_loss
 
 
@@ -239,44 +323,6 @@ def inference_with_dropout(model, inputs, return_attn_scores=True):
         return model(inputs, return_attn_scores=False)
 
 
-def init_distributed_model(args):
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        args.rank = int(os.environ['RANK'])
-        args.world_size = int(os.environ['WORLD_SIZE'])
-        args.gpu = int(os.environ['LOCAL_RANK'])
-    elif 'SLURM_PROCID' in os.environ:
-        args.rank = int(os.environ['SLURM_PROCID'])
-        args.gpu = args.rank % torch.cuda.device_count()
-    else:
-        print('Not using distributed mode.')
-        args.distributed = False
-        return
-
-    args.distributed = True
-
-    torch.cuda.set_device(args.gpu)
-    args.dist_backend = 'nccl'
-    print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
-    torch.distributed.init_process_group(backend=args.dist_backend,
-                                         init_method=args.dist_url,
-                                         world_size=args.world_size,
-                                         rank=args.rank
-                                         )
-    torch.distributed.barrier()
-    setup_for_distributed(args.rank == 0)
-
-
-def setup_for_distributed(is_master):
-    import builtins as __builtin__
-    builtin_print = __builtin__.print
-
-    def print(*args, **kwargs):
-        force = kwargs.pop('force', False)
-        if is_master or force:
-            builtin_print(*args, **kwargs)
-
-
 if __name__ == '__main__':
-    # parser = argparse.ArgumentParser('SiTv2', parents=[get_args_parser()])
-    # args = parser.parse_args()
     main()
+

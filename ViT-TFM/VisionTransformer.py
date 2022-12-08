@@ -286,7 +286,7 @@ class Block(nn.Module):
     mlp : MLP
         MLP module.
     """
-    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0.1, attn_p=0.1, drop_path=0.1):
+    def __init__(self, dim, n_heads, mlp_ratio=4.0, qkv_bias=True, p=0.1, attn_p=0., drop_path=0.):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = Attention(dim, n_heads=n_heads, qkv_bias=qkv_bias, attn_p=attn_p, proj_p=p)
@@ -373,14 +373,15 @@ class VisionTransformer(nn.Module):
             mlp_ratio=4.,
             qkv_bias=True,
             p=0.1,
-            attn_p=0.1,
-            drop_path=0.1,
+            attn_p=0.,
+            drop_path=0.,
     ):
         super().__init__()
         self.patch_embed = PatchEmbed(dspl_size, patch_size, embed_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
         self.pos_drop = nn.Dropout(p)
         dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
+        print(dpr)
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -432,15 +433,6 @@ class VisionTransformer(nn.Module):
         else:
             return logits
 
-    def _init_weight(self, m):
-        if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_normal_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.LayerNorm):
-                nn.init.constant_(m.bias, 0)
-                nn.init.constant_(m.weight, 1.0)
-
 
 class PretrainedVit(nn.Module):
 
@@ -472,12 +464,12 @@ class RecTracHead(nn.Module):
         super().__init__()
         layers = [nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, in_dim), nn.GELU()]
         self.mlp = nn.Sequential(*layers)
-        self.apply(self._init_weights)
-        self.convTrans = nn.ConvTranspose2d(
+        self.rec = nn.ConvTranspose2d(
             in_dim,
             2,
             kernel_size=(patch_size, patch_size),
             stride=(patch_size, patch_size))
+        self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -487,8 +479,8 @@ class RecTracHead(nn.Module):
 
     def forward(self, x):
         x = self.mlp(x)
-        x_rec = x.transpose(1, 2)
-        out_sz = tuple((int(math.sqrt(x_rec.size()[2])), int(math.sqrt(x_rec.size()[2]))))
-        x_rec = self.convTrans(x_rec.unflatten(2, out_sz))
+        x = x.transpose(1, 2)
+        out_sz = tuple((int(math.sqrt(x.size()[2])), int(math.sqrt(x.size()[2]))))
+        x_rec = self.rec(x.unflatten(2, out_sz))
 
         return x_rec

@@ -46,25 +46,26 @@ class EventGenerator:
     def generate_PointForces(self):
         num_i = self.params['resolutionY']
         counter = 0
-        PointForcemesh = np.zeros((self.params['resolutionY'],self.params['resolutionY'],2))
-        PointForces = pd.DataFrame({"x_coord":[],"y_coord":[],"force":[],"gamma":[],"radius":[]})
+        PointForcemesh = np.zeros((self.params['resolutionY'], self.params['resolutionY'], 2))
+        PointForces = pd.DataFrame({"x_coord": [], "y_coord": [], "force": [], "gamma": [], "radius": []})
         while counter < np.random.uniform(10, 50):
-            R = np.random.uniform(0.01,0.05)
-            point = np.random.uniform(0+R+0.05,1-R-0.05,2)
-            force = np.random.uniform(self.params['traction_min'],self.params['traction_max'])
-            force = force/self.E
-            gamma = np.random.uniform(0,2*np.pi)
-            if counter == 0 or self.min_dist(PointForces,point,R) > 0.001:
-                PointForces = PointForces.append({"x_coord":point[0],
-                                                  "y_coord":point[1],
-                                                  "force":force,
-                                                  "gamma":gamma,
-                                                  "radius":R         },
-                                                  ignore_index=True    )
-                x_f,y_f = pol2cart(force,gamma)
-                PointForcemesh[inCircle(self.force_mesh[:,:,0],self.force_mesh[:,:,1],point[0],point[1],R)]+=np.array([x_f,y_f])
-                counter+=1
-
+            R = np.random.uniform(0.01, 0.05)
+            point = np.random.uniform(0 + R + 0.05, 1 - R - 0.05, 2)
+            force = np.random.uniform(self.params['traction_min'], self.params['traction_max'])
+            force = force / self.E
+            gamma = np.random.uniform(0, 2 * np.pi)
+            if counter == 0 or self.min_dist(PointForces, point, R) > 0.001:
+                PointForces = PointForces.append({"x_coord": point[0],
+                                                  "y_coord": point[1],
+                                                  "force": force,
+                                                  "gamma": gamma,
+                                                  "radius": R},
+                                                 ignore_index=True)
+                x_f, y_f = pol2cart(force, gamma)
+                PointForcemesh[
+                    inCircle(self.force_mesh[:, :, 0], self.force_mesh[:, :, 1], point[0], point[1], R)] += np.array(
+                    [x_f, y_f])
+                counter += 1
 
         return PointForcemesh, PointForces
 
@@ -72,11 +73,11 @@ class EventGenerator:
         raise NotImplementedError
 
     def generate(self, event_num):
-        f_data_disp = tables.open_file('../ViT-TFM/data/displacements_25.h5', mode='w')
+        f_data_disp = tables.open_file('../ViT-TFM/data/displacements_50.h5', mode='w')
         atom = tables.Float64Atom()
         self.data_disp = f_data_disp.create_earray(f_data_disp.root, 'data', atom,
                                                    (0, self.params['resolutionX'], self.params['resolutionX'], 2))
-        f_data_force = tables.open_file('../ViT-TFM/data/tractions_25.h5', mode='w')
+        f_data_force = tables.open_file('../ViT-TFM/data/tractions_50.h5', mode='w')
         self.data_force = f_data_force.create_earray(f_data_force.root, 'data', atom,
                                                      (0, self.params['resolutionY'], self.params['resolutionY'], 2))
         for i in tqdm(range(event_num)):
@@ -131,15 +132,15 @@ class AnalyticalEventGenerator(EventGenerator):
         for index, row in PointForces.iterrows():
             trafo = np.array([-row.x_coord, -row.y_coord])
             force = np.array([row.force, row.gamma])
-            displacement += np.array([[self.analytical(self.displacement_mesh[i][j] + trafo, force, row.radius)
-                                       if self.analytical(self.displacement_mesh[i][j] + trafo, force,
-                                                          row.radius) is not np.nan
-                                       else self.analytical(
-                self.displacement_mesh[i][(j - 1) % len(self.displacement_mesh[i])] + trafo, force, row.radius)
-                                       for j in range(len(self.displacement_mesh[i]))
-                                       ]
-                                      for i in range(len(self.displacement_mesh))
-                                      ])
+            displacement += np.array(
+                [
+                    [self.analytical(self.displacement_mesh[i][j] + trafo, force, row.radius)
+                        if self.analytical(self.displacement_mesh[i][j] + trafo, force, row.radius) is not np.nan
+                        else self.analytical(self.displacement_mesh[i][(j - 1) % len(self.displacement_mesh[i])] + trafo, force, row.radius)
+                        for j in range(len(self.displacement_mesh[i]))
+                    ]
+                    for i in range(len(self.displacement_mesh))
+                ])
         return displacement
 
 
@@ -149,5 +150,6 @@ Gen = AnalyticalEventGenerator({'resolutionX': 104,
                                 'traction_max': 500,
                                 'nu': 0.49})
 
-count = 25
+count = 50
 Gen.generate(count)
+

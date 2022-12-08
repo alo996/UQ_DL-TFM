@@ -1,7 +1,6 @@
 import argparse
 import copy
 import datetime
-import os
 from datetime import datetime
 from time import sleep
 
@@ -12,35 +11,38 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from gc import collect
 
-from DPT import DPT
+from DPT import DPT, init_weights
 
 
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
     parser.add_argument('--use_pretrained_model', type=bool, default=False)
-    parser.add_argument('--batch_size', type=int, default=10,
-                        help='input batch size for training (default: 10)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--batch_size', type=int, default=16,
+                        help='input batch size for training (default: 2)')
+    parser.add_argument('--epochs', type=int, default=2,
                         help='number of epochs to train (default: 20)')
-    parser.add_argument('--patience', type=int, default=30,
+    parser.add_argument('--patience', type=int, default=70,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
-    parser.add_argument('--dry_run', action='store_true', default=False,
+    parser.add_argument('--iters_to_accumulate', default=4,
+                        help='quickly check a single pass')
+    parser.add_argument('--dry_run', default=False,
                         help='quickly check a single pass')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.05,
+    parser.add_argument('--lr', type=float, default=0.5,
                         help='initial learning rate (default: 0.1)')
-    parser.add_argument('--weight_decay', type=float, default=0.0005,
+    parser.add_argument('--weight_decay', type=float, default=0.000005,
                         help='initial learning rate (default: 0.0005)')
-    parser.add_argument('--use_amp', type=float, default=False,
+    parser.add_argument('--use_amp', type=float, default=True,
                         help='use automatic mixed precision')
     # Misc
-    parser.add_argument('--seed', type=int, default=2,
+    parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 2)')
-    parser.add_argument('--num_workers', type=int, default=10,
+    parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers per GPU (default: 4')
     parser.add_argument('--save_model', action='store_true', default=False,
                         help='For Saving the current Model')
@@ -60,19 +62,17 @@ def main():
     else:
         device = torch.device('cpu')
 
-    device = torch.device('cpu')
-
-    # Preparing dataset
-    dspl = h5py.File('/Users/alex/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/displacements_25.h5')["data"]
-    trac = h5py.File('/Users/alex/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/tractions_25.h5')["data"]
+    # Prepare training and validation dataset.
+    dspl = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/displacements_res_104_num_50000.h5')["data"]
+    trac = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/tractions_res_104_num_50000.h5')["data"]
 
     dspl = np.moveaxis(np.array(dspl), 3, 1)
     trac = np.moveaxis(np.array(trac), 3, 1)
 
-    dspl_train = dspl[0:24, :, :, :]
-    dspl_val = dspl[24:, :, :, :]
-    trac_train = trac[0:24, :, :, :]
-    trac_val = trac[24:, :, :, :]
+    dspl_train = dspl[0:2500, :, :, :]
+    dspl_val = dspl[2500:2550, :, :, :]
+    trac_train = trac[0:2500, :, :, :]
+    trac_val = trac[2500:2550, :, :, :]
 
     X_train = torch.from_numpy(dspl_train).float()
     Y_train = torch.from_numpy(trac_train).float()
@@ -82,78 +82,158 @@ def main():
     train_set = TensorDataset(X_train, Y_train)
     val_set = TensorDataset(X_val, Y_val)
 
-    dataloader_kwargs = {'batch_size': args.batch_size,
-                         'num_workers': args.num_workers,
-                         'pin_memory': str(device) == 'cuda',
-                         'shuffle': True}
-    dataloaders = {'train': DataLoader(train_set, **dataloader_kwargs),
-                   'val': DataLoader(val_set, **dataloader_kwargs)}
+    dataloader_kwargs = {
+        'batch_size': args.batch_size,
+        'num_workers': args.num_workers,
+        'pin_memory': str(device) == 'cuda'}
+    dataloaders = {
+        'train': DataLoader(train_set, shuffle=True, **dataloader_kwargs),
+        'val': DataLoader(val_set, shuffle=False, **dataloader_kwargs)}
+
     # Create model
-    dpt_model = DPT().float()
+    dpt_model = DPT(device=device)
+    dpt_model.apply(init_weights)
     n_params = sum(p.numel() for p in dpt_model.parameters() if p.requires_grad)
     print(f"number of parameters in dpt: {n_params}")
 
     # Loss and optimizer
     loss = torch.nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.AdamW(dpt_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # amp_scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
-    # scheduler = WarmupLinearSchedule(optimizer, warmup_steps=3, t_total=args.epochs)
+    optimizer = torch.optim.Adam(dpt_model.parameters(), lr=args.lr, eps=1e-03, weight_decay=args.weight_decay, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5, last_epoch=-1)
 
     NAME = "DPT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
-    fit(dpt_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience)
+    collect()
+    torch.cuda.empty_cache()
+    fit(dpt_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, args.iters_to_accumulate, scheduler)
     writer.close()
 
 
-def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience):
+def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience, iters_to_accumulate, scheduler=None):
     best_val_loss = np.inf
     best_epoch = -1
     best_model_weights = {}
+    train_loss = np.inf
     optimizer_state_dict_in_best_epoch = {}
-    model.to(device)
+    model = model.to(device)
+
+    # Create Tensorboard graph
+    model.eval()
     example_input, example_value = next(iter(dataloaders['train']))
     writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
-        train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, train=True)
-        val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch, optimizer=None, train=False)
-        print(
-            f"Epoch {epoch}/{max_epochs}, train_loss: {train_loss}")
+        train_loss = run_train_epoch(model, loss_fn, dataloaders['train'], device, epoch, optimizer, iters_to_accumulate, use_amp=True)
+        val_loss = run_inference_epoch(model, loss_fn, dataloaders['val'], device, epoch, use_amp=True, visualize_attn=False)
+        if scheduler is not None:
+            scheduler.step()
 
         writer.add_scalar('train_loss', train_loss, epoch)
         writer.add_scalar('val_loss', val_loss, epoch)
 
-        # Save best weights
+        # Save best weights.
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
             best_model_weights = copy.deepcopy(model.state_dict())
             optimizer_state_dict_in_best_epoch = copy.deepcopy(optimizer.state_dict())
 
-        # Early stopping
+        # Early stopping.
         print(
-            f"best_val_loss: {np.round(best_val_loss, 6)}, "
-            f"epoch: {epoch}, best_epoch: {best_epoch}, "
+            '\n'
+            f"Epoch: {epoch}/{max_epochs}" '\n'
+            f"train loss: {np.round(train_loss, 12)}" '\n'
+            f"best_val_loss: {np.round(best_val_loss, 12)}" '\n'
+            f"epoch: {epoch}, best_epoch: {best_epoch}" '\n'
             f"current_patience: {patience - (epoch - best_epoch)}")
         if epoch - best_epoch >= patience:
             break
 
+    last_model_weights = copy.deepcopy(model.state_dict())
+
     torch.save({
         'best_epoch': best_epoch,
         'best_model_weights': best_model_weights,
+        'last_model_weights': last_model_weights,
         'optimizer_state_dict_in_best_epoch': optimizer_state_dict_in_best_epoch,
+        'loss': train_loss,
         'best_val_loss': best_val_loss
     },
-        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 6)}.pth')
+        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 10)}.pth')
 
 
-def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visualize_attn=False):
-    # Set model to training mode
-    if train:
-        model.train()
-    else:
-        model.eval()
+def run_train_epoch(model, loss_fn, dataloader, device, epoch, optimizer, iters_to_accumulate=1, use_amp=True):
+    model.train()
+    # Reset the gradients to None.
+    optimizer.zero_grad(set_to_none=True)
+    epoch_loss = 0.0
 
+    if str(device) == 'cuda':
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        with tqdm(dataloader, unit="batch") as tepoch:
+            for i, (xb, yb) in enumerate(tepoch):
+                tepoch.set_description(f"Epoch {epoch}")
+
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+                    output = model(xb)
+                    assert output.dtype is torch.float16
+                    loss = loss_fn(output, yb)
+                    loss = loss / iters_to_accumulate
+                    assert loss.dtype is torch.float32
+
+                # Accumulates scaled gradients.
+                scaler.scale(loss).backward()
+
+                if (i+1) % 2 == 0 or (i+1) == len(dataloader):
+                    # Gradient clipping.
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+
+                # statistics
+                epoch_loss += loss.item()
+
+            epoch_loss /= len(dataloader.dataset)
+            tepoch.set_postfix(loss=epoch_loss)
+            sleep(0.01)
+
+    elif str(device) == 'cpu':
+        with tqdm(dataloader, unit="batch") as tepoch:
+            for i, (xb, yb) in enumerate(tepoch):
+                tepoch.set_description(f"Epoch {epoch}")
+
+                optimizer.zero_grad(set_to_none=True)
+
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+
+                with torch.autocast(device_type='cpu', enabled=use_amp):
+                    output = model(xb)
+                    loss = loss_fn(output, yb)
+
+                # Gradient clipping.
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                optimizer.step()
+
+                # statistics
+                epoch_loss += loss.item()
+
+            epoch_loss /= len(dataloader.dataset)
+            tepoch.set_postfix(loss=epoch_loss)
+            sleep(0.01)
+
+    return epoch_loss
+
+
+def run_inference_epoch(model, loss_fn, dataloader, device, epoch, use_amp=True, visualize_attn=False):
+    # Set model to evaluation mode.
+    model.eval()
     epoch_loss = 0.0
 
     with tqdm(dataloader, unit="batch") as tepoch:
@@ -161,40 +241,37 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, visua
         for xb, yb in tepoch:
             tepoch.set_description(f"Epoch {epoch}")
 
-            xb, yb = xb.to(device), yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
 
-            # zero the parameters
-            if train:
-                optimizer.zero_grad(set_to_none=True)
+            if str(device) == 'cuda':
+                with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+                    if visualize_attn:
+                        pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
+                        assert pred.dtype is torch.float16
+                    else:
+                        pred = model(xb)
+                        assert pred.dtype is torch.float16
+                    loss = loss_fn(pred, yb)
+                    assert loss.dtype is torch.float32
 
-            # forward
-            if visualize_attn:
-                pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
-            else:
-                pred = model(xb)
-            if not train and visualize_attn:
-                with torch.set_grad_enabled(not train):
-                    attn_mat = torch.stack(attn_scores) # attn_mat.shape==(depth, samples, n_heads, n_patches**0.5, n_patches**0.5)
-                    attn_mat = attn_mat.squeeze(1) # shape remains unchanged unless samples==1, then: (depth, n_heads, n_patches**0.5, n_patches**0.5)
-                    attn_mat = torch.mean(attn_mat, dim=1) # if samples==1: attn_mat.shape==(depth, n_patches**0.5,n_patches**0.5)
+            elif str(device) == 'cpu':
+                with torch.autocast(device_type='cpu', dtype=torch.float16, enabled=use_amp):
+                    if visualize_attn:
+                        pred, attn_scores = model(xb)  # attn_scores: [attn_1, ..., attn_depth]
+                        assert pred.dtype is torch.float16
+                    else:
+                        pred = model(xb)
+                        assert pred.dtype is torch.float16
+                    loss = loss_fn(pred, yb)
+                    assert loss.dtype is torch.float32
 
-            with torch.set_grad_enabled(train):
-                print(pred.shape)
-                print(pred.shape)
-                loss = loss_fn(pred, yb)
-
-                # backward + optimize if in training phase
-                if train:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
-                    optimizer.step()
-
-            # statistics
             epoch_loss += loss.item()
 
-        epoch_loss /= len(dataloader.dataset)
-        tepoch.set_postfix(loss=epoch_loss)
-        sleep(0.01)
+    epoch_loss /= len(dataloader.dataset)
+    tepoch.set_postfix(loss=epoch_loss)
+    sleep(0.01)
+
     return epoch_loss
 
 
