@@ -15,7 +15,6 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, device=device)
 
     def forward(self, x):
-        B, C, H, W = x.shape
         x = self.proj(x)
         x = x.flatten(2).transpose(1, 2)
         return x
@@ -83,47 +82,6 @@ class Block(nn.Module):
         x = x + self.attn(self.norm1(x))
         x = x + self.mlp(self.norm2(x))
         return x
-
-
-# DPT specific stuff
-def get_readout_oper(features, use_readout, start_index=0):
-    if use_readout is False:
-        readout_oper = [Slice(start_index)] * features
-    else:
-        assert (
-            False
-        ), "wrong operation for readout token, use_readout can be 'ignore', 'add', or 'project'"
-
-    return readout_oper
-
-
-def init_weights(m):
-    if isinstance(m, (nn.Linear, nn.Conv2d)):
-        torch.nn.init.xavier_uniform_(m.weight)
-        if isinstance(m, nn.Linear) and m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
-
-class Slice(nn.Module):
-    def __init__(self, start_index=0):
-        super(Slice, self).__init__()
-        self.start_index = start_index
-
-    def forward(self, x):
-        return x[:, self.start_index:]
-
-
-class LayerScale(nn.Module):
-    def __init__(self, dim, init_values=1e-5, inplace=False):
-        super().__init__()
-        self.inplace = inplace
-        self.gamma = nn.Parameter(init_values * torch.ones(dim))
-
-    def forward(self, x):
-        return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
 
 class Transpose(nn.Module):
@@ -273,7 +231,6 @@ class DPT(nn.Module):
         super(DPT, self).__init__()
         self.encoder = Encoder(embed_dim=embed_dim, device=device)
 
-        self.readout_oper = get_readout_oper(features, use_readout=False, start_index=0)
         self.act_postprocess1 = nn.Sequential(self.readout_oper[0], Transpose(1, 2), nn.Unflatten(2, torch.Size([img_size // 8, img_size // 8])),
                                               nn.Conv2d(in_channels=embed_dim, out_channels=in_shape[0], kernel_size=1, stride=1, padding=0, device=device),
                                               nn.ConvTranspose2d(in_channels=in_shape[0], out_channels=in_shape[0], kernel_size=4, stride=4, padding=0, bias=True, dilation=1, groups=1, device=device))

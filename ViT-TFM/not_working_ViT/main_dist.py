@@ -26,9 +26,9 @@ def main():
     parser.add_argument('--use_pretrained_model', type=bool, default=False)
     parser.add_argument('--batch_size', type=int, default=8,
                         help='input batch size for training (default: 2)')
-    parser.add_argument('--epochs', type=int, default=5,
+    parser.add_argument('--epochs', type=int, default=24,
                         help='number of epochs to train (default: 20)')
-    parser.add_argument('--patience', type=int, default=5,
+    parser.add_argument('--patience', type=int, default=24,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
@@ -37,7 +37,7 @@ def main():
     parser.add_argument('--dry_run', default=False,
                         help='quickly check a single pass')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=0.01,
                         help='initial learning rate (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
@@ -87,7 +87,7 @@ def main():
         X_val = torch.from_numpy(dspl_val).float()
         Y_val = torch.from_numpy(trac_val).float()
         vit_model = vit.VisionTransformer(dspl_size=104, patch_size=8, embed_dim=128, depth=12, n_heads=8, mlp_ratio=4.,
-                                          p=0.1, attn_p=0., drop_path=0.).float()
+                                          p=0.05, attn_p=0., drop_path=0.).float()
 
     else:
         X_train = torch.from_numpy(dspl_train).double()
@@ -95,7 +95,7 @@ def main():
         X_val = torch.from_numpy(dspl_val).double()
         Y_val = torch.from_numpy(trac_val).double()
         vit_model = vit.VisionTransformer(dspl_size=104, patch_size=8, embed_dim=128, depth=12, n_heads=8, mlp_ratio=4.,
-                                          p=0., attn_p=0., drop_path=0.).double()
+                                          p=0.05, attn_p=0., drop_path=0.).double()
 
     # vit_model.apply(init_weights)
     n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
@@ -119,7 +119,7 @@ def main():
 
     # Loss and optimizer
     loss = torch.nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.Adam(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, eps=1e-7)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5, last_epoch=-1)
 
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
@@ -129,7 +129,7 @@ def main():
     print(f"device is {str(device)}")
     print(f"batch_size is {args.batch_size}")
     print(f"use_amp is {args.use_amp}")
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, args.iters_to_accumulate, args.use_amp, scheduler, vis_attn=args.vis_attn)
+    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, args.iters_to_accumulate, args.use_amp, scheduler=None, vis_attn=args.vis_attn)
     writer.close()
 
 

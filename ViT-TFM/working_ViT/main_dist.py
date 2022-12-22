@@ -14,6 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import VisionTransformer_working as vit
+from MultiTask import multi_task_loss
 
 
 def main():
@@ -21,18 +22,16 @@ def main():
     parser = argparse.ArgumentParser(description='TFM-ViT')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='input batch size for training (default: 16)')
-    parser.add_argument('--val_batch_size', type=int, default=500,
-                        help='input batch size for validation (default: 500)')
-    parser.add_argument('--epochs', type=int, default=8,
+    parser.add_argument('--val_batch_size', type=int, default=32,
+                        help='input batch size for validation (default: 32)')
+    parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 100)')
-    parser.add_argument('--patience', type=int, default=5,
+    parser.add_argument('--patience', type=int, default=36,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
-    parser.add_argument('--dry_run', action='store_true', default=False,
-                        help='quickly check a single pass')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=0.005,
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
@@ -43,8 +42,10 @@ def main():
                         help='random seed (default: 1)')
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
+    parser.add_argument('--use_multi_task', type=bool, default=True,
+                        help='optimize multi-task objective')
     args = parser.parse_args()
 
     # If possible, setup distributed training and seeds
@@ -56,16 +57,25 @@ def main():
     cudnn.benchmark = True
 
     # Preparing dataset
-    dspl = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/working/displacements_res_104_num_50000.h5')["data"]
-    trac = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/working/tractions_res_104_num_50000.h5')["data"]
+    dspl = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/data_with_patch_info/displacements_10.h5')["data"]
+    trac = h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/data_with_patch_info/separated_tractions_10.h5')["data"]
 
-    dspl = np.moveaxis(np.array(dspl), 3, 1)
-    trac = np.moveaxis(np.array(trac), 3, 1)
+    if args.use_multi_task:
+        dspl = np.moveaxis(np.array(dspl[:, :, :, :]), 3, 1)
+        trac_separated = np.moveaxis(np.array(trac[:, :, :, :]), 4, 2)
 
-    dspl_train = dspl[0:25000, :, :, :]
-    dspl_val = dspl[25000:25500, :, :, :]
-    trac_train = trac[0:25000, :, :, :]
-    trac_val = trac[25000:25500, :, :, :]
+        dspl_train = dspl[0:8, :, :, :]
+        dspl_val = dspl[8:, :, :, :]
+        trac_train = trac_separated[0:8, :, :, :, :]
+        trac_val = trac_separated[8:, :, :, :, :]
+    else:
+        dspl = np.moveaxis(np.array(dspl), 3, 1)
+        trac = np.moveaxis(np.array(trac), 3, 1)
+
+        dspl_train = dspl[0:25000, :, :, :]
+        dspl_val = dspl[25000:29000, :, :, :]
+        trac_train = trac[0:25000, :, :, :]
+        trac_val = trac[25000:29000, :, :, :]
 
     X_train = torch.from_numpy(dspl_train).float()
     Y_train = torch.from_numpy(trac_train).float()
@@ -86,33 +96,35 @@ def main():
                                       depth=12,
                                       n_heads=8,
                                       mlp_ratio=4.,
-                                      p=0.1,
+                                      p=0.,
                                       attn_p=0.,
                                       drop_path=0.).float()
 
-
     n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
-    print(n_params)
-
-    # Loss and optimizer
-    loss = torch.nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.2, last_epoch=-1)
+    print(f"Number of model parameters to optimize: {n_params}")
 
     if args.use_cuda:
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
 
+    # Loss and optimizer
+    if args.use_multi_task:
+        loss = multi_task_loss
+    else:
+        loss = torch.nn.MSELoss(reduction='mean')
+    optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
+
     NAME = "ViT-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
     writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
     if args.continue_training:
-        checkpoint = torch.load('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/working/logs_and_weights/ViT-2022-Dec-08 12:10:13/ViT-2022-Dec-08 12:10:13_best_val_rmse_3.99e-07.pth', map_location=device)
-        print(device)
-        print(checkpoint)
-        vit_model.load_state_dict(checkpoint['best_model_weights'])
+        checkpoint = torch.load(
+            '/ViT-TFM/working_ViT/logs_and_weights/ViT-2022-Dec-10 11:33:45/ViT-2022-Dec-10 11:33:45_best_val_loss_2.649155e-06.pth')
+        vit.model = vit_model.load_state_dict(checkpoint['best_model_weights'])
+        vit_model.to(device)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict_in_best_epoch'])
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, scheduler)
+    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, scheduler=None)
     writer.close()
 
 
@@ -148,7 +160,9 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
             f"train loss: {np.round(train_loss, 12)}" '\n'
             f"best_val_loss: {np.round(best_val_loss, 12)}" '\n'
             f"epoch: {epoch}, best_epoch: {best_epoch}" '\n'
-            f"current_patience: {patience - (epoch - best_epoch)}")
+            f"current patience: {patience - (epoch - best_epoch)}" '\n'
+        )
+
         if epoch - best_epoch >= patience:
             break
 
@@ -157,7 +171,7 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         'best_model_weights': best_model_weights,
         'optimizer_state_dict_in_best_epoch': optimizer_state_dict_in_best_epoch,
     },
-        f'logs_and_weights/{NAME}/{NAME}_best_val_rmse_{np.round(best_val_loss, 10)}.pth')
+        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 12)}.pth')
 
 
 def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
@@ -179,16 +193,16 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
 
                     with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
                         output = model(xb)
-                        loss = loss_fn(output, yb)
-                        loss = loss / 2
+                        loss = loss_fn(output, yb, device=device)
+                        loss = loss / 1
 
                     # Accumulates scaled gradients.
                     scaler.scale(loss).backward()
 
-                    if (i + 1) % 2 == 0 or (i + 1) == len(dataloader):
+                    if (i + 1) % 1 == 0 or (i + 1) == len(dataloader):
                         # Gradient clipping.
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
                         scaler.step(optimizer)
                         scaler.update()
                         optimizer.zero_grad(set_to_none=True)
@@ -218,13 +232,14 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
 
                 # forward
                 with torch.set_grad_enabled(train):
+                    model
                     pred = model(xb)
-                    loss = loss_fn(pred, yb)
+                    loss = loss_fn(pred, yb, device=device)
 
                     # backward + optimize if in training phase
                     if train:
                         loss.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
                         optimizer.step()
 
                 # statistics
