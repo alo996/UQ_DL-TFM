@@ -4,6 +4,8 @@ from tqdm import tqdm
 import tables
 from scipy.special import ellipk, ellipe
 import multiprocessing as mp
+import h5py
+import os
 
 def cart2pol(x, y):
     rho = np.sqrt(x ** 2 + y ** 2)
@@ -36,10 +38,7 @@ class EventGenerator:
         return mesh
 
     def write_PointForces(self, PointForces):
-        self.data_force.append(np.array([PointForces]))
-
-    def write_PointForcemeshes(self, PointForcemeshes):
-        self.data_separated_forces.append(np.array([PointForcemeshes]))
+        self.data_forces.append(np.array([PointForces]))
 
     def write_Displacement(self, displacement):
         self.data_disp.append(np.array([displacement]))
@@ -48,9 +47,9 @@ class EventGenerator:
         return np.min(np.sqrt((PF.x_coord - point[0]) ** 2 + (PF.y_coord - point[1]) ** 2) - 2 * R)
 
     def generate_PointForces(self):
-        num_i = self.params['resolutionY']
         counter = 0
-        PointForcemeshes = np.zeros((50, self.params['resolutionY'], self.params['resolutionY'], 2))
+        PointForceSegmentation = np.zeros((self.params['resolutionY'], self.params['resolutionY']))
+        PointForceMesh = np.zeros((self.params['resolutionY'],self.params['resolutionY'], 2))
         PointForces = pd.DataFrame({"x_coord": [], "y_coord": [], "force": [], "gamma": [], "radius": []})
         while counter < np.random.uniform(10, 50):
             R = np.random.uniform(0.01, 0.05)
@@ -66,37 +65,36 @@ class EventGenerator:
                                                          "radius": R}])
                 PointForces = pd.concat([PointForces, force_hook])
                 x_f, y_f = pol2cart(force, gamma)
-                PointForcemesh = np.zeros((self.params['resolutionY'], self.params['resolutionY'], 2))
-                PointForcemesh[
+                PointForceSeg_temp = np.where(inCircle(self.force_mesh[:, :, 0], self.force_mesh[:, :, 1], point[0], point[1], R), counter + 1, 0)
+                PointForceMesh[
                     inCircle(self.force_mesh[:, :, 0], self.force_mesh[:, :, 1], point[0], point[1], R)] += np.array(
                     [x_f, y_f])
-                PointForcemeshes[counter, :, :, :] = PointForcemesh
+                PointForceSegmentation += PointForceSeg_temp
                 counter += 1
 
-        return PointForcemeshes, PointForces
+        return PointForceSegmentation, PointForceMesh, PointForces
 
     def generate_displacement(self, PointForces):
         raise NotImplementedError
 
     def generate(self, event_num):
         atom = tables.Float64Atom()
-        f_data_disp = tables.open_file(f'/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/extended data/displacements_{self.num_generator}.h5', mode='w')
+        f_data_disp = tables.open_file(f'/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/extended data/dspl_{self.num_generator}_res_{self.params["resolutionX"]}.h5', mode='w')
         self.data_disp = f_data_disp.create_earray(f_data_disp.root, 'data', atom,
                                                    (0, self.params['resolutionX'], self.params['resolutionX'], 2))
-
-        f_data_separated_forces = tables.open_file(f'/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/extended data/sep_tractions_{self.num_generator}.h5',
-                                                   mode='w')
-        self.data_separated_forces = f_data_separated_forces.create_earray(f_data_separated_forces.root, 'data', atom,
-                                                                           (0, 50, self.params['resolutionY'],
-                                                                            self.params['resolutionY'], 2))
+        f_data_forces = tables.open_file(f'/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/extended data/trac_{self.num_generator}_res_{self.params["resolutionX"]}.h5', mode='w')
+        self.data_forces = f_data_forces.create_earray(f_data_forces.root, 'data', atom,
+                                                                           (0, self.params['resolutionY'],
+                                                                            self.params['resolutionY'], 3))
 
         for i in tqdm(range(event_num)):
-            PointForcemeshes, PointForces = self.generate_PointForces()
+            PointForceSegmentation, PointForceMesh, PointForces = self.generate_PointForces()
+            PointForceInfo = np.dstack((PointForceMesh, PointForceSegmentation))
             displacement = self.generate_displacement(PointForces)
-            self.write_PointForcemeshes(PointForcemeshes)
+            self.write_PointForces(PointForceInfo)
             self.write_Displacement(displacement)
         f_data_disp.close()
-        f_data_separated_forces.close()
+        f_data_forces.close()
 
 class AnalyticalEventGenerator(EventGenerator):
 
@@ -154,11 +152,11 @@ class AnalyticalEventGenerator(EventGenerator):
         return displacement
 
 
-def generate_data_in_parallel(samples_per_generator, num_generator):
+def start_data_generator(samples_per_generator, num_generator):
     print(f"Process {num_generator} has started")
     np.random.seed(num_generator)
-    Gen = AnalyticalEventGenerator({'resolutionX': 104,
-                                    'resolutionY': 104,
+    Gen = AnalyticalEventGenerator({'resolutionX': 32,
+                                    'resolutionY': 32,
                                     'traction_min': 0,
                                     'traction_max': 500,
                                     'nu': 0.49,
@@ -166,9 +164,41 @@ def generate_data_in_parallel(samples_per_generator, num_generator):
     Gen.generate(samples_per_generator)
 
 
-pool = mp.Pool(processes=20)
-samples_per_generator = 25000 // 20
-for i in range(1, 21):
-    pool.apply_async(generate_data_in_parallel, args=(samples_per_generator, i))
-pool.close()
-pool.join()
+def aggregate_dspl_hdf5_files():
+    with h5py.File("extended data/resolution_32_32/allDisplacements_res_32", "w") as f_dst:
+        h5files = [f for f in os.listdir('extended data/resolution_32_32') if f.startswith("dspl") and f.endswith("32.h5")]
+        h5files.sort()
+
+        dset = f_dst.create_dataset("dspl", shape=(6, 2000, 32, 32, 2), dtype='f8')
+
+        for i, filename in enumerate(h5files):
+            print(filename)
+            with h5py.File(f'extended data/resolution_32_32/{filename}') as f_src:
+                dset[i] = f_src["data"]
+
+
+def aggregate_trac_hdf5_files():
+    with h5py.File("extended data/resolution_32_32/allTractions_res_32", "w") as f_dst:
+        h5files = [f for f in os.listdir('extended data/resolution_32_32') if f.startswith("trac") and f.endswith("32.h5")]
+        h5files.sort()
+
+        dset = f_dst.create_dataset("trac", shape=(6, 2000, 32, 32, 3), dtype='f8')
+
+        for i, filename in enumerate(h5files):
+            print(filename)
+            with h5py.File(f'extended data/resolution_32_32/{filename}') as f_src:
+                dset[i] = f_src["data"]
+
+
+def generate_data_in_parallel(num_processes):
+    pool = mp.Pool(processes=num_processes)
+    samples_per_generator = 20000 // num_processes
+    for i in range(5, num_processes + 1):
+        pool.apply_async(start_data_generator, args=(samples_per_generator, i))
+    pool.close()
+    pool.join()
+
+
+# generate_data_in_parallel(num_processes=10)
+aggregate_dspl_hdf5_files()
+aggregate_trac_hdf5_files()
