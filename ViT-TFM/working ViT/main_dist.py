@@ -1,10 +1,8 @@
 import argparse
 import copy
 import datetime
-import os
 from datetime import datetime
 from time import sleep
-from torch import autograd
 
 import h5py
 import numpy as np
@@ -18,14 +16,14 @@ import VisionTransformer_working as vit
 from MultiTask import multi_task_loss, dtma, dda, append_predictions_and_targets
 
 
-def main():
+def execute():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='input batch size for training (default: 16)')
     parser.add_argument('--val_batch_size', type=int, default=32,
                         help='input batch size for validation (default: 32)')
-    parser.add_argument('--epochs', type=int, default=5,
+    parser.add_argument('--epochs', type=int, default=1,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--patience', type=int, default=50,
                         help='Early stopping.')
@@ -43,7 +41,7 @@ def main():
                         help='random seed (default: 1)')
     parser.add_argument('--num_workers', type=int, default=6,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=True,
                         help='optimize multi-task objective')
@@ -64,10 +62,10 @@ def main():
     dspl = np.moveaxis(np.concatenate([dspl[i] for i in range(dspl.shape[0])], axis=0), 3, 1)
     trac_separated = np.moveaxis(np.concatenate([trac_separated[i] for i in range(trac_separated.shape[0])], axis=0), 3, 1)
 
-    dspl_train = dspl[0:23000, :, :, :]
-    dspl_val = dspl[23000:, :, :, :]
-    trac_train = trac_separated[0:23000, :, :, :]
-    trac_val = trac_separated[23000:, :, :, :]
+    dspl_train = dspl[0:20, :, :, :]
+    dspl_val = dspl[20:25, :, :, :]
+    trac_train = trac_separated[0:20, :, :, :]
+    trac_val = trac_separated[20:25, :, :, :]
 
     X_train = torch.from_numpy(dspl_train).float()
     Y_train = torch.from_numpy(trac_train).float()
@@ -163,21 +161,6 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
             f"epoch: {epoch}, best_epoch: {best_epoch}" '\n'
             f"current patience: {patience - (epoch - best_epoch)}" '\n'
         )
-        '''
-        print(
-            '\n'
-            f"Epoch: {epoch}/{max_epochs}" '\n'
-            f"train loss: {train_loss}" '\n'
-            f"train dtma: {train_dtma}" '\n'
-            f"train dda: {train_dda}" '\n'
-            f"val loss: {val_loss}" '\n'
-            f"val dtma: {val_dtma}" '\n'
-            f"val dda: {val_dda}" '\n'
-            f"best_val_loss: {best_val_loss}" '\n'
-            f"epoch: {epoch}, best_epoch: {best_epoch}" '\n'
-            f"current patience: {patience - (epoch - best_epoch)}" '\n'
-        )
-        '''
 
         # Early stopping.
         if epoch - best_epoch >= patience:
@@ -298,4 +281,4 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train):
 
 
 if __name__ == '__main__':
-    main()
+    execute()

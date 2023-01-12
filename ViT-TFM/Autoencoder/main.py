@@ -54,11 +54,11 @@ def main():
     cudnn.benchmark = True
 
     # Prepare dataset
-    dspl_res_32_small = h5py.File('../data/extended data/resolution_32_32/allDisplacements_res_32_small')["dspl"]
-    trac_res_32_small = h5py.File('../data/extended data/resolution_32_32/allTractions_res_32_small')["trac"]
+    dspl_res_32_small = h5py.File('../data/Training data/resolution_32/allDisplacements_res_32_small')["dspl"]
+    trac_res_32_small = h5py.File('../data/Training data/resolution_32/allTractions_res_32_small')["trac"]
 
-    dspl_res_32 = h5py.File('../data/extended data/resolution_32_32/allDisplacements_res_32')["dspl"]
-    trac_res_32 = h5py.File('../data/extended data/resolution_32_32/allTractions_res_32')["trac"]
+    dspl_res_32 = h5py.File('../data/Training data/resolution_32/allDisplacements_res_32')["dspl"]
+    trac_res_32 = h5py.File('../data/Training data/resolution_32/allTractions_res_32')["trac"]
 
     dspl_large = np.moveaxis(np.concatenate([dspl_res_32[i] for i in range(dspl_res_32.shape[0])], axis=0), 3, 1)
     dspl_small = np.moveaxis(np.concatenate([dspl_res_32_small[i] for i in range(dspl_res_32_small.shape[0])], axis=0), 3, 1)
