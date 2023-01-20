@@ -1,5 +1,4 @@
 from time import sleep
-from pathlib import Path
 from pytorch_pretrained_vit import ViT
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
@@ -31,7 +30,7 @@ def execute():
                         help='input batch size for training (default: 4)')
     parser.add_argument('--val_batch_size', type=int, default=2,
                         help='input batch size for validation (default: 4)')
-    parser.add_argument('--epochs', type=int, default=5,
+    parser.add_argument('--epochs', type=int, default=20,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--patience', type=int, default=25,
                         help='Early stopping.')
@@ -49,11 +48,11 @@ def execute():
                         help='random seed (default: 1)')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=False,
                         help='optimize multi-task objective')
-    parser.add_argument('--use_pretrained_model', type=bool, default=True,
+    parser.add_argument('--use_pretrained_model', type=bool, default=False,
                         help='use a ViT backbone')
 
     args = parser.parse_args()
@@ -70,21 +69,21 @@ def execute():
     trac_train = np.array(h5py.File('../data/Training data/resolution_104/allTractions.h5', 'r')['trac'])
     dspl_train = np.moveaxis(np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0), 3, 1)
     trac_train = np.moveaxis(np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0), 3, 1)
-    X_train = torch.from_numpy(dspl_train[0:20]).float()
+    X_train = torch.from_numpy(dspl_train).float()
     cov = [[args.noise_level ** 2, 0], [0, args.noise_level ** 2]]
     X_train_noise = np.transpose(np.random.multivariate_normal(np.array([0, 0]), cov, (X_train.shape[0], X_train.shape[2], X_train.shape[3])), (0, 3, 2, 1))
     X_train_noise = X_train + X_train_noise
-    Y_train = torch.from_numpy(trac_train[0:20]).float()
+    Y_train = torch.from_numpy(trac_train).float()
     train_set = TensorDataset(X_train_noise.float(), Y_train)
 
     dspl_val = np.array(h5py.File('../data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'])
     trac_val = np.array(h5py.File('../data/Validation data/resolution_104/allTractions.h5', 'r')['trac'])
     dspl_val = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
     trac_val = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
-    X_val = torch.from_numpy(dspl_val[0:20]).float()
+    X_val = torch.from_numpy(dspl_val).float()
     X_val_noise = np.transpose(np.random.multivariate_normal(np.array([0, 0]), cov, (X_val.shape[0], X_val.shape[2], X_val.shape[3])), (0, 3, 2, 1))
     X_val_noise = X_val + X_val_noise
-    Y_val = torch.from_numpy(trac_val[0:20]).float()
+    Y_val = torch.from_numpy(trac_val).float()
     val_set = TensorDataset(X_val_noise.float(), Y_val)
 
     dataloader_kwargs = {'num_workers': args.num_workers, 'pin_memory': args.use_cuda, 'shuffle': True}
@@ -117,35 +116,52 @@ def execute():
     print(f"Running on device: {device}")
 
     # Loss and optimizer
-    loss = torch.nn.MSELoss(reduction='mean')
+    loss = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
 
     if args.continue_training:
-        NAME = 'ViT_pretrained-2023-01-12 12:44:59.013496'
+        NAME = 'ViT_pretrained-2023-01-12 15:42:20.847105'
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
-        checkpoint = torch.load(f'logs_and_weights/{NAME}/ViT_pretrained-2023-01-12 12:44:59.013496_best_val_loss_26.52827835083.pth')
-        vit.model = vit_model.load_state_dict(checkpoint['best_model_weights'])
+        checkpoint = torch.load(f'logs_and_weights/{NAME}/ViT_pretrained-2023-01-12 15:42:20.847105_best_val_loss_26.52827835083.pth')
+        vit.model = vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
         vit_model.to(device)
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict_in_best_epoch'])
+        optimizer = optimizer.load_state_dict(checkpoint['final_optimizer_state_dict'])
         event_acc = EventAccumulator(f'logs_and_weights/{NAME}')
         event_acc.Reload()
         global_step = event_acc.Scalars(tag='train_loss')[-1].step
+        best_val_loss = checkpoint['best_val_loss']
+        best_epoch = checkpoint['best_epoch']
+
     else:
-        NAME = f"ViT_pretrained-{datetime.now()}"
+        NAME = "ViT_pretrained-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
         global_step = 0
+        best_val_loss = np.inf
+        best_epoch = 0
 
-    fit(vit_model, loss, dataloaders, optimizer, device, writer, NAME, args.epochs, args.patience, global_step, scheduler=None)
+
+    fit(vit_model,
+        loss,
+        dataloaders,
+        optimizer,
+        device,
+        writer,
+        NAME,
+        args.epochs,
+        args.patience,
+        global_step,
+        best_val_loss,
+        best_epoch,
+        scheduler=None)
     writer.flush()
     writer.close()
 
 
-def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience, global_step, scheduler=None):
-    best_val_loss = np.inf
-    best_epoch = 0
-    best_model_weights = {}
-    optimizer_state_dict_in_best_epoch = {}
+def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience, global_step, best_val_loss, best_epoch, scheduler=None):
+    best_val_loss = best_val_loss
+    best_epoch = best_epoch
+
     model.to(device)
     example_input, example_value = next(iter(dataloaders['train']))
     writer.add_graph(model, example_input.to(device))
@@ -167,8 +183,13 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch + global_step
-            best_model_weights = copy.deepcopy(model.state_dict())
-            optimizer_state_dict_in_best_epoch = copy.deepcopy(optimizer.state_dict())
+            torch.save({
+                'best_val_loss': best_val_loss,
+                'best_epoch': best_epoch,
+                'best_model_weights': model.state_dict(),
+                'optimizer_state_dict_in_best_epoch': optimizer.state_dict(),
+            },
+                f'logs_and_weights/{NAME}/{NAME}.pth')
 
         print(
             '\n'
@@ -188,12 +209,11 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         if (epoch + global_step) - (best_epoch + global_step) >= patience:
             break
 
-    torch.save({
-        'best_epoch': best_epoch,
-        'best_model_weights': best_model_weights,
-        'optimizer_state_dict_in_best_epoch': optimizer_state_dict_in_best_epoch,
-    },
-        f'logs_and_weights/{NAME}/{NAME}_best_val_loss_{np.round(best_val_loss, 12)}.pth')
+        torch.save({
+            'final_model_weights': model.state_dict(),
+            'final_optimizer_state_dict': optimizer.state_dict(),
+        },
+            f'logs_and_weights/{NAME}/{NAME}.pth')
 
 
 def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters_to_accumulate=8):

@@ -404,7 +404,7 @@ class RecTracHead(nn.Module):
         self.apply(self._init_weights)
         self.convTrans = nn.ConvTranspose2d(
             in_dim,
-            1,
+            2,
             kernel_size=(patch_size, patch_size),
             stride=(patch_size, patch_size))
 
@@ -421,28 +421,3 @@ class RecTracHead(nn.Module):
         x_rec = self.convTrans(x_rec.unflatten(2, out_sz))
 
         return x_rec
-
-
-class PretrainedVit(nn.Module):
-
-    def __init__(self, model_pretrained):
-        super(PretrainedVit, self).__init__()
-        self.patch_embed = PatchEmbed(dspl_size=104, patch_size=8, embed_dim=768)
-        self.pos_embed = nn.Parameter(torch.zeros(1, 169, 768))
-        self.transformer = model_pretrained.transformer.requires_grad_(True)
-        self.rec_trac_head = RecTracHead(in_dim=768, patch_size=8)
-
-    def forward(self, x):
-        x = self.patch_embed(x)
-        x = x + self.pos_embed
-        x = self.transformer(x)
-        x = self.rec_trac_head(x)
-        return x
-
-
-class Identity(nn.Module):
-    def __init__(self):
-        super(Identity, self).__init__()
-
-    def forward(self, x):
-        return x
