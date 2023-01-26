@@ -50,6 +50,56 @@ class DropPath(nn.Module):
         return drop_path(x, self.drop_p, self.training)
 
 
+class ShiftedPatchTokenization(nn.Module):
+    def __init__(self, dspl_size, patch_size, embed_dim):
+        super().__init__()
+        self.dspl_size = dspl_size
+        self.patch_size = patch_size
+        self.n_patches = (dspl_size // patch_size) ** 2
+        self.half_patch_size = patch_size // 2
+        self.layernorm = nn.LayerNorm([10, 104, 104], eps=1e-07)
+        self.proj = nn.Conv2d(in_channels=10, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def crop_shif_pad(self, x, mode, device):
+        padded_x = torch.zeros(size=x.shape).to(device)
+        n_samples, c, h, w = x.shape
+        if mode == 'left-up':
+            padded_x[:, :, 0:h-self.half_patch_size:, self.half_patch_size:] = x[:, :, self.half_patch_size:, 0:w-self.half_patch_size]
+        if mode == 'right-up':
+            padded_x[:, :, 0:h-self.half_patch_size, 0:w-self.half_patch_size] = x[:, :, self.half_patch_size:, self.half_patch_size:]
+        if mode == 'left-down':
+            padded_x[:, :, self.half_patch_size:, self.half_patch_size:] = x[:, :, 0:h-self.half_patch_size:, 0:w-self.half_patch_size]
+        if mode == 'right-down':
+            padded_x[:, :, self.half_patch_size:, 0:w-self.half_patch_size] = x[:, :, 0:h-self.half_patch_size:, self.half_patch_size:]
+
+        return padded_x
+
+    def forward(self, x, device):
+        """
+        Run forward pass.
+        Parameters
+        __________
+        x : torch.Tensor
+            Shape `(n_samples, 2, dspl_size, dspl_size)
+        Returns
+        _______
+        torch.Tensor
+            Shape `(n_samples, n_patches, embed_dim)
+        """
+        left_up = self.crop_shif_pad(x, 'left-up', device)
+        right_up = self.crop_shif_pad(x, 'right-up', device)
+        left_down = self.crop_shif_pad(x, 'left-down', device)
+        right_down = self.crop_shif_pad(x, 'right-down', device)
+
+        concat = torch.cat((x, left_up, right_up, left_down, right_down), axis=1)  # (n_samples, 10, dspl_size, dspl,size)
+        x = self.layernorm(concat)
+        x = self.proj(x)  # (n_samples, embed_dim, n_patches ** 0.5, n_patches ** 0.5)
+        x = x.flatten(2)  # (n_samples, embed_dim, n_patches)
+        x = x.transpose(1, 2)  # (n_samples, n_patches, embed_dim)
+
+        return x
+
+
 class PatchEmbed(nn.Module):
     """Split displacement field into patches and embed them.
     Parameters
@@ -276,6 +326,13 @@ class Block(nn.Module):
             return x
 
 
+class Transpose(nn.Module):
+    def __init__(self, dim0, dim1):
+        super(Transpose, self).__init__()
+        self.dim0 = dim0
+        self.dim1 = dim1
+
+
 class VisionTransformer(nn.Module):
     """
     Implementation of Vision Transformer.
@@ -319,10 +376,10 @@ class VisionTransformer(nn.Module):
             qkv_bias=True,
             p=0.,
             attn_p=0,
-            drop_path=0.1
+            drop_path=0.1,
     ):
         super().__init__()
-        self.patch_embed = PatchEmbed(dspl_size, patch_size, embed_dim)
+        self.patch_embed = ShiftedPatchTokenization(dspl_size, patch_size, embed_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
         self.pos_drop = nn.Dropout(p)
         dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
@@ -340,10 +397,11 @@ class VisionTransformer(nn.Module):
                 for i in range(depth)
             ]
         )
-        self.norm = nn.LayerNorm(embed_dim, eps=1e-7)
-        self.rec_trac_head = RecTracHead(embed_dim, patch_size)
 
-    def forward(self, x, return_attention=False):
+        self.norm = nn.LayerNorm(embed_dim, eps=1e-7)
+        self.rec_trac_head = RecTracHead2(embed_dim, patch_size)
+
+    def forward(self, x, device, return_attention=False):
         """
         Run forward pass.
 
@@ -360,20 +418,20 @@ class VisionTransformer(nn.Module):
         logits : torch.Tensor
             Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
-        x = self.patch_embed(x)
+        x = self.patch_embed(x, device)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
 
         if return_attention:
             attn_scores = []
-            for block in self.blocks:
+            for i, block in enumerate(self.blocks):
                 x, attn = block(x, return_attention)
                 attn_scores.append(attn)
 
             x = self.norm(x)
             logits = self.rec_trac_head(x)
 
-            return logits, attn_scores
+            return logits, attn_scores, x
 
         else:
             for block in self.blocks:
@@ -403,10 +461,12 @@ class RecTracHead(nn.Module):
         self.mlp = nn.Sequential(*layers)
         self.apply(self._init_weights)
         self.convTrans = nn.ConvTranspose2d(
-            in_dim,
-            2,
-            kernel_size=(patch_size, patch_size),
-            stride=(patch_size, patch_size))
+        in_dim,
+        2,
+        kernel_size=(patch_size, patch_size),
+        stride=(patch_size, patch_size))
+
+
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -421,3 +481,144 @@ class RecTracHead(nn.Module):
         x_rec = self.convTrans(x_rec.unflatten(2, out_sz))
 
         return x_rec
+
+
+class RecTracHead2(nn.Module):
+    def __init__(self, in_dim, patch_size=8):
+        super().__init__()
+
+        #layers = [nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, in_dim), nn.GELU()]
+
+        #self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.convTrans1 = nn.ConvTranspose2d(in_dim, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.GeLu1 = nn.GELU()
+        self.convTrans2 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.GeLu2 = nn.GELU()
+        self.convTrans3 = nn.ConvTranspose2d(32, 2, kernel_size=3, stride=2, padding=1, output_padding=1)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_normal_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    def forward(self, x):
+        x_rec = x.transpose(1, 2)
+        out_sz = tuple((int(math.sqrt(x_rec.size()[2])), int(math.sqrt(x_rec.size()[2]))))
+        x_rec = self.convTrans1(x_rec.unflatten(2, out_sz))
+        x_rec = self.GeLu1(x_rec)
+        x_rec = self.convTrans2(x_rec)
+        x_rec = self.GeLu2(x_rec)
+        x_rec = self.convTrans3(x_rec)
+
+        return x_rec
+
+
+class VisionTransformer2(nn.Module):
+    """
+    Implementation of Vision Transformer.
+    Parameters
+    __________
+    dspl_size : int
+        Height and width of square displacement field.
+    patch_size : int
+        Height and width of patches.
+    embed_dim : int
+        Dimensionality of the token embeddings.
+    depth : int
+        Number of blocks.
+    n_heads : int
+        Number of attention heads.
+    mlp_ratio : float
+        Determines the hidden dimension of the `MLP` module.
+    p, attn_p. drop_path : float
+        Dropout probabilities.
+    Attributes
+    __________
+    patch_embed : PatchEmbed
+        Instance of PatchEmbed.
+    pos_embed : nn.Parameter
+        Positional embedding of all patches. It contains `n_patches * embed_dim` elements.
+    pos_drop : nn.Dropout
+        Dropout layer.
+    blocks : nn.ModuleList
+        List of `Block` modules.
+    norm : nn.LayerNorm
+        Layer normalization.
+    """
+    def __init__(
+            self,
+            dspl_size=104,
+            patch_size=8,
+            embed_dim=2*104,
+            depth=12,
+            n_heads=12,
+            mlp_ratio=4.,
+            qkv_bias=True,
+            p=0.05,
+            attn_p=0,
+            drop_path=0.,
+    ):
+        super().__init__()
+        self.patch_embed = ShiftedPatchTokenization(dspl_size, patch_size, embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
+        self.pos_drop = nn.Dropout(p)
+        dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
+        self.blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=embed_dim,
+                    n_heads=n_heads,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    p=p,
+                    attn_p=attn_p,
+                    drop_path=dpr[i]
+                )
+                for i in range(depth)
+            ]
+        )
+
+        self.norm = nn.LayerNorm(embed_dim, eps=1e-7)
+        self.rec_trac_head = RecTracHead2(embed_dim, patch_size)
+
+    def forward(self, x, device, return_attention=False):
+        """
+        Run forward pass.
+
+        Parameters
+        __________
+        x : torch.Tensor
+            Shape `(n_samples, 2, dspl_size, dspl_size)`
+
+        return_attention : Bool
+            Whether to return the list of raw attention tensors.
+
+        Returns
+        _______
+        logits : torch.Tensor
+            Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
+        """
+        x = self.patch_embed(x, device)
+        x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
+        x = self.pos_drop(x)
+
+        if return_attention:
+            attn_scores = []
+            for i, block in enumerate(self.blocks):
+                x, attn = block(x, return_attention)
+                attn_scores.append(attn)
+
+            x = self.norm(x)
+            logits = self.rec_trac_head(x)
+
+            return logits, attn_scores, x
+
+        else:
+            for block in self.blocks:
+                x = block(x)
+
+            x = self.norm(x)
+            logits = self.rec_trac_head(x)
+
+            return logits
