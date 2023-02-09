@@ -116,7 +116,6 @@ def dma(predictions, targets, appended_predictions, appended_targets, device, pe
                                        dim=2)  # shape (batch_size, 50, dspl_size, dspl_size)
     max_norm_per_real_patch = torch.amax(l2_real, dim=(2, 3))  # shape(batch_size, 50)
     nominator = max_norm_per_pred_patch - max_norm_per_real_patch
-    print(f'nominator.shape is {nominator.shape}')
 
     num_trac_vecs_per_patch = torch.count_nonzero(
         torch.linalg.vector_norm(appended_targets[:, :, 0:2, :, :], ord=2, dim=2), dim=(2, 3))
@@ -191,9 +190,6 @@ def cosine_sim(appended_predictions, appended_targets, device, per_sample=False)
         torch.linalg.vector_norm(appended_targets[:, :, 0:2, :, :], ord=2, dim=2), dim=(2, 3))
     cos_theta = torch.nn.functional.cosine_similarity(appended_predictions, appended_targets, dim=2,
                                                       eps=1e-08)  # shape(batch_size, 50, dspl_size, dspl_size)
-    print(f'cos_theta.shape is {cos_theta.shape}')
-    print(f'max val in cos_theta: {torch.max(cos_theta)}')
-    print(f'min val in cos_theta: {torch.min(cos_theta)}')
     norm_const = torch.nan_to_num(1 / (num_trac_vecs_per_patch), nan=0, posinf=0)  # shape (batch_size, 50)
     cos_sim_per_patch = norm_const * torch.sum(cos_theta, dim=(2, 3))
     cos_sim_per_dspl = (1 / normalization) * torch.sum(cos_sim_per_patch, dim=1)
