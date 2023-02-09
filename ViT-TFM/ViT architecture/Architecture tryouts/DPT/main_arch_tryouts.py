@@ -35,7 +35,7 @@ def execute():
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.0001,
+    parser.add_argument('--lr', type=float, default=0.00001,
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
