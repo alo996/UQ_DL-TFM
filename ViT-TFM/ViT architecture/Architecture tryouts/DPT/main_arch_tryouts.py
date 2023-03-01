@@ -1,52 +1,47 @@
 from time import sleep
-from pytorch_pretrained_vit import ViT
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 import argparse
-import copy
-import datetime
 from datetime import datetime
 import h5py
 import numpy as np
-import os
-import sys
 import torch
 import torch.backends.cudnn as cudnn
-from torch import autograd
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import VisionTransformer_working_for_DPT as vit
 
+
 def execute():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
-    parser.add_argument('--noise_level', type=float, default=1e-4,
-                        help='Gaussian noise level to corrupt data with')
-    parser.add_argument('--batch_size', type=int, default=2,
-                        help='input batch size for training (default: 4)')
-    parser.add_argument('--val_batch_size', type=int, default=2,
-                        help='input batch size for validation (default: 4)')
-    parser.add_argument('--epochs', type=int, default=50,
-                        help='number of epochs to train (default: 100)')
-    parser.add_argument('--patience', type=int, default=25,
+    parser.add_argument('--noise_percentage', type=float, default=0.005,
+                        help='Percentage to multiply average variance over all training displacement fields with')
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='input batch size for training')
+    parser.add_argument('--val_batch_size', type=int, default=8,
+                        help='input batch size for validation')
+    parser.add_argument('--epochs', type=int, default=500,
+                        help='Number of epochs to train')
+    parser.add_argument('--patience', type=int, default=50,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.00001,
+    parser.add_argument('--lr', type=float, default=0.0001,
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
     parser.add_argument('--use_amp', type=bool, default=True,
                         help='use automatic mixed precision')
     # Misc
-    parser.add_argument('--seed', type=int, default=2,
-                        help='random seed (default: 1)')
+    parser.add_argument('--seed', type=int, default=1,
+                        help='random seed')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=False,
                         help='optimize multi-task objective')
@@ -63,30 +58,97 @@ def execute():
     cudnn.benchmark = True
 
     # Prepare training and validation dataset
-    dspl_train = np.array(h5py.File('../../data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'])
-    trac_train = np.array(h5py.File('../../data/Training data/resolution_104/allTractions.h5', 'r')['trac'])
-    dspl_train = np.moveaxis(np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0), 3, 1)
-    trac_train = np.moveaxis(np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0), 3, 1)
-    X_train = torch.from_numpy(dspl_train).float()
-    cov = [[args.noise_level ** 2, 0], [0, args.noise_level ** 2]]
-    X_train_noise = np.transpose(np.random.multivariate_normal(np.array([0, 0]), cov, (X_train.shape[0], X_train.shape[2], X_train.shape[3])), (0, 3, 2, 1))
-    X_train_noise = X_train + X_train_noise
-    Y_train = torch.from_numpy(trac_train).float()
-    train_set = TensorDataset(X_train_noise.float(), Y_train)
+    # Train
+    # dspl_train_1 = np.array(h5py.File('../../data/Training data/resolution_104/3750/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    dspl_train_2 = np.array(h5py.File('../../data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    #dspl_train_1_full = np.moveaxis(np.concatenate([dspl_train_1[i] for i in range(dspl_train_1.shape[0])], axis=0), 3, 1)
+    # del dspl_train_1
+    dspl_train_2_full = np.moveaxis(np.concatenate([dspl_train_2[i] for i in range(dspl_train_2.shape[0])], axis=0), 3, 1)
+    del dspl_train_2
+    # dspl_train_full = np.vstack((dspl_train_1_full, dspl_train_2_full))
+    #del dspl_train_1_full, dspl_train_2_full
 
-    dspl_val = np.array(h5py.File('../../data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'])
-    trac_val = np.array(h5py.File('../../data/Validation data/resolution_104/allTractions.h5', 'r')['trac'])
+    sigma_bar = args.noise_percentage * np.mean(np.var(dspl_train_2_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {args.noise_percentage}')
+    print(f'sigma_bar: {sigma_bar}')
+    cov = [[sigma_bar, 0], [0, sigma_bar]]
+    for i, x in tqdm(enumerate(dspl_train_2_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_train_2_full[i] = x + noise
+    X_train = torch.from_numpy(dspl_train_2_full).float()
+    del dspl_train_2_full
+    print(f'X_train_full.shape is {X_train.shape}')
+    # X_train_noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(X_train.shape[0], X_train.shape[2], X_train.shape[3])), (0, 3, 2, 1))
+
+    # trac_train_1 = np.array(h5py.File('../../data/Training data/resolution_104/3750/allTractions.h5', 'r')['trac'], dtype="float32")
+    trac_train_2 = np.array(h5py.File('../../data/Training data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
+    # trac_train_1_full = np.moveaxis(np.concatenate([trac_train_1[i] for i in range(trac_train_1.shape[0])], axis=0), 3, 1)
+    # del trac_train_1
+    trac_train_2_full = np.moveaxis(np.concatenate([trac_train_2[i] for i in range(trac_train_2.shape[0])], axis=0), 3, 1)
+    del trac_train_2
+    # del trac_train_2
+    # trac_train_full = np.vstack((trac_train_1_full, trac_train_2_full))
+    # del trac_train_1_full, trac_train_2_full
+    Y_train = torch.from_numpy(trac_train_2_full).float()
+    del trac_train_2_full
+    #print('getting serious')
+    train_dataset = TensorDataset(X_train.float(), Y_train)
+    del X_train, Y_train
+    print("Train set ready")
+
+    # Val
+    dspl_val = np.array(h5py.File('../../data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    trac_val = np.array(h5py.File('../../data/Validation data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
+    dspl_val_full = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
+    del dspl_val
+    trac_val_full = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
+    del trac_val
+
+    sigma_bar_val = args.noise_percentage * np.mean(np.var(dspl_val_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {args.noise_percentage}')
+    print(f'sigma_bar_val: {sigma_bar_val}')
+    cov = [[sigma_bar_val, 0], [0, sigma_bar_val]]
+    for i, x in tqdm(enumerate(dspl_val_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_val_full[i] = x + noise
+    X_val = torch.from_numpy(dspl_val_full).float()
+    del dspl_val_full
+    Y_val = torch.from_numpy(trac_val_full).float()
+    del trac_val_full
+    val_dataset = TensorDataset(X_val.float(), Y_val)
+    del X_val, Y_val
+
+    '''
+    dspl_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    dspl_train = np.moveaxis(np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0), 3, 1)
+    X_train = torch.from_numpy(dspl_train).float()
+    del dspl_train
+    trac_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
+    trac_train = np.moveaxis(np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0), 3, 1)
+    Y_train = torch.from_numpy(trac_train).float()
+    del trac_train
+    train_dataset = TensorDataset(X_train, Y_train)
+    print(f'X_train.shape is {X_train.shape}')
+    print(f'Y_train.shape is {Y_train.shape}')
+    del X_train, Y_train
+
+    dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
     dspl_val = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
-    trac_val = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
     X_val = torch.from_numpy(dspl_val).float()
-    X_val_noise = np.transpose(np.random.multivariate_normal(np.array([0, 0]), cov, (X_val.shape[0], X_val.shape[2], X_val.shape[3])), (0, 3, 2, 1))
-    X_val_noise = X_val + X_val_noise
+    del dspl_val
+    trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
+    trac_val = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
     Y_val = torch.from_numpy(trac_val).float()
-    val_set = TensorDataset(X_val_noise.float(), Y_val)
+    del trac_val
+    val_dataset = TensorDataset(X_val, Y_val)
+    print(f'X_val.shape is {X_val.shape}')
+    print(f'Y_val.shape is {Y_val.shape}')
+    del X_val, Y_val
+    '''
 
     dataloader_kwargs = {'num_workers': args.num_workers, 'pin_memory': args.use_cuda, 'shuffle': True}
-    dataloaders = {'train': DataLoader(train_set, batch_size=args.batch_size, **dataloader_kwargs),
-                   'val': DataLoader(val_set, batch_size=args.val_batch_size, **dataloader_kwargs)}
+    dataloaders = {'train': DataLoader(train_dataset, batch_size=args.batch_size, **dataloader_kwargs),
+                   'val': DataLoader(val_dataset, batch_size=args.batch_size, **dataloader_kwargs)}
 
     # Create model
     if args.use_pretrained_model:
@@ -103,16 +165,11 @@ def execute():
                               attn_p=0.,
                               drop_path=0.).float()
         vit_intermediate.load_state_dict(checkpoint['best_model_weights'], strict=True)
-        patch_tokenizer = vit_intermediate.patch_embed
-        pos_embed = vit_intermediate.pos_embed
-        pos_drop = vit_intermediate.pos_drop
-        blocks = vit_intermediate.blocks
-        norm = vit_intermediate.norm
-        vit_model = vit.VisionTransformer(dspl_size=104,
+        vit_model = vit.VisionTransformer2(dspl_size=104,
                                           patch_size=8,
                                           embed_dim=128,
-                                          depth=12,
-                                          n_heads=8,
+                                          depth=6,
+                                          n_heads=4,
                                           mlp_ratio=4.,
                                           p=0.05,
                                           attn_p=0.,
@@ -122,11 +179,11 @@ def execute():
         vit_model = vit.VisionTransformer(dspl_size=104,
                                           patch_size=8,
                                           embed_dim=128,
-                                          depth=12,
-                                          n_heads=8,
-                                          mlp_ratio=4.,
+                                          depth=4,
+                                          n_heads=4,
+                                          mlp_ratio=1.,
                                           p=0.05,
-                                          attn_p=0.,
+                                          attn_p=0.05,
                                           drop_path=0.).float()
 
     n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
@@ -145,7 +202,7 @@ def execute():
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
 
     if args.continue_training:
-        NAME = 'ViT_with_shifted_patch-2023-Jan-18 09:54:37'
+        NAME = 'ViT-clean_2023-Feb-23 16:48:12'
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
         checkpoint = torch.load(f'logs_and_weights/{NAME}/{NAME}.pth')
         vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
@@ -156,7 +213,7 @@ def execute():
         global_step = event_acc.Scalars(tag='train_loss')[-1].step
 
     else:
-        NAME = "ViT_with_shifted_patch-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
+        NAME = "ViT-clean_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
         global_step = 0
         checkpoint = None
@@ -190,7 +247,7 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
 
     model.to(device)
     example_input, example_value = next(iter(dataloaders['train']))
-    # writer.add_graph(model, example_input.to(device))
+    writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
         train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch + global_step, optimizer, train=True)
@@ -218,7 +275,7 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         )
 
         # Early stopping.
-        if (epoch + global_step) - (best_epoch + global_step) >= patience:
+        if patience - (epoch + global_step - best_epoch) < 0:
             break
 
         torch.save({'best_val_loss': best_val_loss,
@@ -229,7 +286,7 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
                     }, f'logs_and_weights/{NAME}/{NAME}.pth')
 
 
-def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters_to_accumulate=8):
+def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters_to_accumulate=1):
     # Set model to training mode
     epoch_loss = 0.
 
@@ -242,12 +299,27 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
             with tqdm(dataloader, unit="batch") as tepoch:
                 for i, (xb, yb) in enumerate(tepoch):
                     tepoch.set_description(f"Epoch {epoch}")
-
+                    #if i == 1:
+                    #    print(f'xb.shape is {xb.shape}')
+                    #    print(f'yb.shape is {yb.shape}')
+                    #xb_90 = torchvision.transforms.functional.rotate(xb, angle=90)
+                    #xb_180 = torchvision.transforms.functional.rotate(xb, angle=180)
+                    #xb_270 = torchvision.transforms.functional.rotate(xb, angle=270)
+                    #xb = torch.vstack((xb, xb_90, xb_180, xb_270))
                     xb = xb.to(device, non_blocking=True)
+
+                    #yb_90 = torchvision.transforms.functional.rotate(yb, angle=90)
+                    #yb_180 = torchvision.transforms.functional.rotate(yb, angle=180)
+                    #yb_270 = torchvision.transforms.functional.rotate(yb, angle=270)
+                    #yb = torch.vstack((yb, yb_90, yb_180, yb_270))
                     yb = yb.to(device, non_blocking=True)
 
+                    #if i == 1:
+                    #    print(f'xb.shape after augm is {xb.shape}')
+                    #    print(f'yb.shape after augm is {yb.shape}')
+
                     with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
-                        output = model(xb, device=device, return_attention=False)
+                        output = model(xb)
                         loss = loss_fn(output, yb[:, 0:2])
                         loss = loss / iters_to_accumulate
 
@@ -263,9 +335,9 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                         optimizer.zero_grad(set_to_none=True)
 
                     # statistics
-                    epoch_loss += loss.item()
+                    epoch_loss += loss.item() * xb.size(0)
 
-                epoch_loss /= len(dataloader.dataset)
+                epoch_loss /= len(dataloader.sampler)
                 tepoch.set_postfix(loss=epoch_loss)
                 sleep(0.01)
         else:
@@ -278,7 +350,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                     yb = yb.to(device, non_blocking=True)
 
                     with torch.autocast(device_type='cpu', enabled=True):
-                        output = model(xb, device=device, return_attention=False)
+                        output = model(xb)
                         loss = loss_fn(output, yb[:, 0:2])
 
                     # Gradient clipping.
@@ -288,9 +360,9 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                     optimizer.zero_grad(set_to_none=True)
 
                     # statistics
-                    epoch_loss += loss.item()
+                    epoch_loss += loss.item() * xb.size(0)
 
-                epoch_loss /= len(dataloader.dataset)
+                epoch_loss /= len(dataloader.sampler)
                 tepoch.set_postfix(loss=epoch_loss)
                 sleep(0.01)
 
@@ -306,7 +378,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
 
                 # forward
                 with torch.set_grad_enabled(train):
-                    output = model(xb, device=device, return_attention=False)
+                    output = model(xb, return_attention=False)
                     loss = loss_fn(output, yb[:, 0:2])
 
                     # backward + optimize if in training phase
@@ -316,9 +388,9 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                         optimizer.step()
 
                 # statistics
-                epoch_loss += loss.item()
+                epoch_loss += loss.item() * xb.size(0)
 
-            epoch_loss /= len(dataloader.dataset)
+            epoch_loss /= len(dataloader.sampler)
             tepoch.set_postfix(loss=epoch_loss)
             sleep(0.01)
 
