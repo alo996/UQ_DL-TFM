@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+from tqdm import tqdm
 
 
 def append_predictions_and_targets(predictions, targets, device):
@@ -304,3 +306,36 @@ def multi_task_loss(predictions, labels, device):
     DDA = dda_for_train(appended_predictions, appended_targets, device)
 
     return alpha_1 * mse(predictions, labels[:, 0:2, :, :]) + alpha_2 * DTMA + alpha_3 * DDA
+
+
+def compute_mse_for_noise_levels(vit_predictions, cnn_predictions, bfftc_prediction_sets_trimmed,
+                                 ground_truth_sets_trimmed, noisy_X_test_sets_trimmed):
+    vit_mse = {}
+    cnn_mse = {}
+    bfftc_mse = {}
+    noise_levels = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+    mse = torch.nn.MSELoss(reduction='none')
+    for noise_level in noise_levels:
+        vit_mse[noise_level] = torch.mean(
+            mse(vit_predictions[noise_level][:, :, 3:101, 3:101], ground_truth_sets_trimmed[noise_level][:, 0:2, :, :]))
+        cnn_mse[noise_level] = torch.mean(
+            mse(torch.tensor(np.moveaxis(cnn_predictions[noise_level], 3, 1)[:, :, 3:101, 3:101]),
+                ground_truth_sets_trimmed[noise_level][:, 0:2]))
+        bfftc_mse[noise_level] = torch.mean(
+            mse(bfftc_prediction_sets_trimmed[noise_level], ground_truth_sets_trimmed[noise_level][:, 0:2]))
+
+    return vit_mse, cnn_mse, bfftc_mse
+
+
+def compute_dtma_for_noise_levels(appended_vit_predictions, appended_vit_targets, appended_cnn_predictions,
+                                  appended_cnn_targets, appended_bfftc_predictions, appended_bfftc_targets, device):
+    vit_dtma = {}
+    cnn_dtma = {}
+    bfftc_dtma = {}
+    noise_levels = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+    for noise_level in tqdm(noise_levels):
+        vit_dtma[noise_level] = dtma(appended_vit_predictions[noise_level], appended_vit_targets[noise_level], device, False)
+        cnn_dtma[noise_level] =  dtma(appended_cnn_predictions[noise_level], appended_cnn_targets[noise_level], device, False)
+        bfftc_dtma[noise_level] =  dtma(appended_bfftc_predictions[noise_level], appended_bfftc_targets[noise_level], device, False)
+
+    return vit_dtma, cnn_dtma, bfftc_dtma

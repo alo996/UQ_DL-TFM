@@ -1,8 +1,10 @@
 from keras.layers import Input, Conv2D, MaxPooling2D, Dropout, BatchNormalization, Activation, Conv2DTranspose, Concatenate, LeakyReLU
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.losses import MeanSquaredError
-from keras.callbacks import TensorBoard, ModelCheckpoint
+from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
 from keras.optimizers import Adagrad
+from keras import mixed_precision
+import tensorflow as tf
 import pickle
 import numpy as np
 import h5py
@@ -117,27 +119,40 @@ print(f'dspl_val.shape is {dspl_val.shape}')
 print(f'trac_val.shape is {trac_val.shape}')
 '''
 
-input_img = Input(shape=(104, 104, 2))
-unet = get_unet(input_img)
+#input_img = Input(shape=(104, 104, 2))
+#unet = get_unet(input_img)
+config = tf.compat.v1.ConfigProto()
+config.gpu_options.allow_growth = True
+sess = tf.compat.v1.Session(config=config)
 
-unet.compile(optimizer=Adagrad(), loss=MeanSquaredError())
-print(unet.summary())
+#policy = mixed_precision.Policy('mixed_float16')
+#mixed_precision.set_global_policy(policy)
+
+with tf.device("CPU"):
+    train = tf.data.Dataset.from_tensor_slices((dspl_train_2_full, trac_train_2_full[:,:,:,0:2])).batch(8)
+    validate = tf.data.Dataset.from_tensor_slices((dspl_val_full, trac_val_full[:,:,:,0:2])).batch(8)
+
+loaded_model = load_model('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/CNN_noisy-2023-Mar-13 10:26:46_checkpoint.h5')
+#unet.compile(optimizer=Adagrad(), loss=MeanSquaredError())
+#print(unet.summary())
 
 checkpoint_filepath = 'CNN_noisy-{:%Y-%b-%d %H:%M:%S}_checkpoint.h5'.format(datetime.now())
 model_checkpoint_callback = ModelCheckpoint(
     filepath=checkpoint_filepath,
     monitor='val_loss',
     save_best_only=True)
+early_stopping = EarlyStopping(monitor='val_loss', patience=50, verbose=1)
 
-history = unet.fit(x=dspl_train_2_full, y=trac_train_2_full[:,:,:,0:2],
-                   epochs=5000,
-                   batch_size=132,
+
+history = loaded_model.fit(train,
+                   epochs=2000,
+                   batch_size=1,
                    shuffle=False,
-                   validation_data=(dspl_val_full, trac_val_full[:,:,:,0:2]),
-                   callbacks=[model_checkpoint_callback, TensorBoard(log_dir='logs')])
+                   validation_data=validate,
+                   callbacks=[model_checkpoint_callback, TensorBoard(log_dir='logs'), early_stopping])
 
 with open('history.pkl', 'wb') as f:
     pickle.dump(history.history, f, pickle.HIGHEST_PROTOCOL)
 
 NAME = "CNN_noisy-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
-unet.save(f'{NAME}.h5')
+loaded_model.save(f'{NAME}.h5')
