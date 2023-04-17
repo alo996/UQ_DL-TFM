@@ -132,7 +132,7 @@ with tf.device("CPU"):
     train = tf.data.Dataset.from_tensor_slices((dspl_train_2_full, trac_train_2_full[:,:,:,0:2])).batch(8)
     validate = tf.data.Dataset.from_tensor_slices((dspl_val_full, trac_val_full[:,:,:,0:2])).batch(8)
 
-loaded_model = load_model('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/CNN_noisy-2023-Mar-13 10:26:46_checkpoint.h5')
+loaded_model = load_model('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/CNN_noisy-2023-Mar-21 16:57:44.h5')
 #unet.compile(optimizer=Adagrad(), loss=MeanSquaredError())
 #print(unet.summary())
 

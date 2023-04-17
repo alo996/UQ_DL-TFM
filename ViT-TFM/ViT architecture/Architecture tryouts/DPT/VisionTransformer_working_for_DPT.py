@@ -373,13 +373,13 @@ class VisionTransformer(nn.Module):
             depth=12,
             n_heads=12,
             mlp_ratio=4.,
-            qkv_bias=True,
+            qkv_bias=False,
             p=0.,
             attn_p=0,
             drop_path=0.1,
     ):
         super().__init__()
-        self.patch_embed = ShiftedPatchTokenization(dspl_size, patch_size, embed_dim)
+        self.patch_embed = PatchEmbed(dspl_size, patch_size, embed_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
         self.pos_drop = nn.Dropout(p)
         dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
@@ -401,7 +401,7 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm(embed_dim, eps=1e-7)
         self.rec_trac_head = RecTracHead2(embed_dim, patch_size)
 
-    def forward(self, x, device, return_attention=False):
+    def forward(self, x, return_attention=False):
         """
         Run forward pass.
 
@@ -418,7 +418,7 @@ class VisionTransformer(nn.Module):
         logits : torch.Tensor
             Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
-        x = self.patch_embed(x, device)
+        x = self.patch_embed(x)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
 
@@ -487,9 +487,6 @@ class RecTracHead2(nn.Module):
     def __init__(self, in_dim, patch_size=8):
         super().__init__()
 
-        #layers = [nn.Linear(in_dim, in_dim), nn.GELU(), nn.Linear(in_dim, in_dim), nn.GELU()]
-
-        #self.mlp = nn.Sequential(*layers)
         self.apply(self._init_weights)
         self.convTrans1 = nn.ConvTranspose2d(in_dim, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
         self.GeLu1 = nn.GELU()
@@ -510,6 +507,37 @@ class RecTracHead2(nn.Module):
         x_rec = self.convTrans2(x_rec)
         x_rec = self.GeLu2(x_rec)
         x_rec = self.convTrans3(x_rec)
+
+        return x_rec
+
+
+class RecTracHead3(nn.Module):
+    def __init__(self, in_dim, patch_size=8):
+        super().__init__()
+
+        self.apply(self._init_weights)
+        self.convTrans1 = nn.ConvTranspose2d(in_dim, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.GeLu1 = nn.GELU()
+        self.convTrans2 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.GeLu2 = nn.GELU()
+        self.convTrans3 = nn.ConvTranspose2d(32, 4, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.SoftPlus = nn.Softplus()
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_normal_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    def forward(self, x):
+        x_rec = x.transpose(1, 2)
+        out_sz = tuple((int(math.sqrt(x_rec.size()[2])), int(math.sqrt(x_rec.size()[2]))))
+        x_rec = self.convTrans1(x_rec.unflatten(2, out_sz))
+        x_rec = self.GeLu1(x_rec)
+        x_rec = self.convTrans2(x_rec)
+        x_rec = self.GeLu2(x_rec)
+        x_rec = self.convTrans3(x_rec)
+        vars = self.SoftPlus(x_rec[:, 2:])
+        x_rec = torch.cat((x_rec[:, 0:2], self.SoftPlus(x_rec[:, 2:])), dim=1)
 
         return x_rec
 
@@ -554,7 +582,7 @@ class VisionTransformer2(nn.Module):
             depth=12,
             n_heads=12,
             mlp_ratio=4.,
-            qkv_bias=True,
+            qkv_bias=False,
             p=0.05,
             attn_p=0,
             drop_path=0.,
@@ -600,6 +628,116 @@ class VisionTransformer2(nn.Module):
             Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
         x = self.patch_embed(x, device)
+        x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
+        x = self.pos_drop(x)
+
+        if return_attention:
+            attn_scores = []
+            for i, block in enumerate(self.blocks):
+                x, attn = block(x, return_attention)
+                attn_scores.append(attn)
+
+            x = self.norm(x)
+            logits = self.rec_trac_head(x)
+
+            return logits, attn_scores, x
+
+        else:
+            for block in self.blocks:
+                x = block(x)
+
+            x = self.norm(x)
+            logits = self.rec_trac_head(x)
+
+            return logits
+
+
+class VisionTransformer3(nn.Module):
+    """
+    Implementation of Vision Transformer.
+    Parameters
+    __________
+    dspl_size : int
+        Height and width of square displacement field.
+    patch_size : int
+        Height and width of patches.
+    embed_dim : int
+        Dimensionality of the token embeddings.
+    depth : int
+        Number of blocks.
+    n_heads : int
+        Number of attention heads.
+    mlp_ratio : float
+        Determines the hidden dimension of the `MLP` module.
+    p, attn_p. drop_path : float
+        Dropout probabilities.
+    Attributes
+    __________
+    patch_embed : PatchEmbed
+        Instance of PatchEmbed.
+    pos_embed : nn.Parameter
+        Positional embedding of all patches. It contains `n_patches * embed_dim` elements.
+    pos_drop : nn.Dropout
+        Dropout layer.
+    blocks : nn.ModuleList
+        List of `Block` modules.
+    norm : nn.LayerNorm
+        Layer normalization.
+    """
+    def __init__(
+            self,
+            dspl_size=104,
+            patch_size=8,
+            embed_dim=2*104,
+            depth=12,
+            n_heads=12,
+            mlp_ratio=4.,
+            qkv_bias=False,
+            p=0.05,
+            attn_p=0,
+            drop_path=0.,
+    ):
+        super().__init__()
+        self.patch_embed = PatchEmbed(dspl_size, patch_size, embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
+        self.pos_drop = nn.Dropout(p)
+        dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]  # stochastic depth decay rule
+        self.blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=embed_dim,
+                    n_heads=n_heads,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    p=p,
+                    attn_p=attn_p,
+                    drop_path=dpr[i]
+                )
+                for i in range(depth)
+            ]
+        )
+
+        self.norm = nn.LayerNorm(embed_dim, eps=1e-7)
+        self.rec_trac_head = RecTracHead3(embed_dim, patch_size)
+
+    def forward(self, x, return_attention=False):
+        """
+        Run forward pass.
+
+        Parameters
+        __________
+        x : torch.Tensor
+            Shape `(n_samples, 2, dspl_size, dspl_size)`
+
+        return_attention : Bool
+            Whether to return the list of raw attention tensors.
+
+        Returns
+        _______
+        logits : torch.Tensor
+            Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
+        """
+        x = self.patch_embed(x)
         x = x + self.pos_embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
 

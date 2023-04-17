@@ -34,7 +34,7 @@ def append_predictions_and_targets(predictions, targets, device):
     return appended_predictions, appended_targets
 
 
-def dtmb(predictions, targets, appended_predictions, appended_targets, device, per_sample=False):
+def dtmb(predictions, targets, appended_targets, device, per_sample=False):
     n_samples, _, dspl_size, dspl_size = targets.shape
     with torch.no_grad():
         temp = (appended_targets[:, :].to(device) == torch.zeros((2, dspl_size, dspl_size)).to(device)).flatten(2).all(
@@ -74,7 +74,7 @@ def dtmb(predictions, targets, appended_predictions, appended_targets, device, p
         return torch.mean(nominator / (denominator + 1e-07))
 
 
-def snr(predictions, targets, appended_predictions, appended_targets, device, per_sample=False):
+def snr(predictions, targets, appended_targets, device, per_sample=False):
     n_samples, _, dspl_size, dspl_size = targets.shape
     with torch.no_grad():
         temp = (appended_targets[:, :].to(device) == torch.zeros((2, dspl_size, dspl_size)).to(device)).flatten(2).all(
@@ -104,7 +104,7 @@ def snr(predictions, targets, appended_predictions, appended_targets, device, pe
         return torch.mean(nominator / (denominator + 1e-07))
 
 
-def dma(predictions, targets, appended_predictions, appended_targets, device, per_sample=False):
+def dma(targets, appended_predictions, appended_targets, device, per_sample=False):
     n_samples, _, dspl_size, dspl_size = targets.shape
     with torch.no_grad():
         temp = (appended_targets[:, :].to(device) == torch.zeros((2, dspl_size, dspl_size)).to(device)).flatten(2).all(

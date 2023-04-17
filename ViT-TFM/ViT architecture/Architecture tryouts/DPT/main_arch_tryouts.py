@@ -23,7 +23,7 @@ def execute():
                         help='input batch size for training')
     parser.add_argument('--val_batch_size', type=int, default=8,
                         help='input batch size for validation')
-    parser.add_argument('--epochs', type=int, default=500,
+    parser.add_argument('--epochs', type=int, default=1000,
                         help='Number of epochs to train')
     parser.add_argument('--patience', type=int, default=50,
                         help='Early stopping.')
@@ -41,7 +41,7 @@ def execute():
                         help='random seed')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=False,
+    parser.add_argument('--continue_training', type=bool, default=True,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=False,
                         help='optimize multi-task objective')
@@ -165,7 +165,7 @@ def execute():
                               attn_p=0.,
                               drop_path=0.).float()
         vit_intermediate.load_state_dict(checkpoint['best_model_weights'], strict=True)
-        vit_model = vit.VisionTransformer2(dspl_size=104,
+        vit_model = vit.VisionTransformer3(dspl_size=104,
                                           patch_size=8,
                                           embed_dim=128,
                                           depth=6,
@@ -202,7 +202,7 @@ def execute():
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
 
     if args.continue_training:
-        NAME = 'ViT-clean_2023-Feb-23 16:48:12'
+        NAME = 'ViT-clean_2023-Feb-26 22:41:48'
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
         checkpoint = torch.load(f'logs_and_weights/{NAME}/{NAME}.pth')
         vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
