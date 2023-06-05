@@ -1,0 +1,352 @@
+from time import sleep
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+import argparse
+from datetime import datetime
+import h5py
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+
+import VisionTransformer as vit
+
+
+def execute():
+    # Training settings
+    parser = argparse.ArgumentParser(description='TFM-ViT')
+    parser.add_argument('--noise_percentage', type=float, default=0.005,
+                        help='Percentage to multiply average variance over all training displacement fields with')
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='input batch size for training')
+    parser.add_argument('--val_batch_size', type=int, default=8,
+                        help='input batch size for validation')
+    parser.add_argument('--epochs', type=int, default=5000,
+                        help='Number of epochs to train')
+    parser.add_argument('--patience', type=int, default=50,
+                        help='Early stopping.')
+    parser.add_argument('--use_cuda', action='store_true', default=True,
+                        help='Enables CUDA training')
+    # Optimizer settings
+    parser.add_argument('--lr', type=float, default=0.001,
+                        help='initial learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.0005,
+                        help='initial learning rate')
+    parser.add_argument('--use_amp', type=bool, default=True,
+                        help='use automatic mixed precision')
+    # Misc
+    parser.add_argument('--seed', type=int, default=1,
+                        help='random seed')
+    parser.add_argument('--num_workers', type=int, default=8,
+                        help='Number of data loading workers per GPU')
+    parser.add_argument('--continue_training', type=bool, default=False,
+                        help='continue training given a checkpoint')
+    parser.add_argument('--use_multi_task', type=bool, default=False,
+                        help='optimize multi-task objective')
+
+
+    args = parser.parse_args()
+
+    # Set seeds
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    cudnn.benchmark = True
+
+    # Prepare training and validation dataset
+    # Train
+    dspl_train_sets = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    dspl_train_full = np.moveaxis(np.concatenate([dspl_train_sets[i] for i in range(dspl_train_sets.shape[0])], axis=0), 3, 1)
+    del dspl_train_sets
+
+    sigma_bar = args.noise_percentage * np.mean(np.var(dspl_train_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {args.noise_percentage}')
+    print(f'sigma_bar: {sigma_bar}')
+    cov = [[sigma_bar, 0], [0, sigma_bar]]
+    for i, x in tqdm(enumerate(dspl_train_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_train_full[i] = x + noise
+    X_train = torch.from_numpy(dspl_train_full).float()
+    del dspl_train_full
+    print(f'X_train_full.shape is {X_train.shape}')
+
+    trac_train_sets = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
+    trac_train_full = np.moveaxis(np.concatenate([trac_train_sets[i] for i in range(trac_train_sets.shape[0])], axis=0), 3, 1)
+    del trac_train_sets
+    Y_train = torch.from_numpy(trac_train_sets).float()
+    del trac_train_sets
+    train_dataset = TensorDataset(X_train.float(), Y_train)
+    del X_train, Y_train
+    print("Train set ready")
+
+    # Val
+    dspl_val_sets = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    dspl_val_full = np.moveaxis(np.concatenate([dspl_val_sets[i] for i in range(dspl_val_sets.shape[0])], axis=0), 3, 1)
+    del dspl_val_sets
+    sigma_bar_val = args.noise_percentage * np.mean(np.var(dspl_val_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {args.noise_percentage}')
+    print(f'sigma_bar_val: {sigma_bar_val}')
+    cov = [[sigma_bar_val, 0], [0, sigma_bar_val]]
+    for i, x in tqdm(enumerate(dspl_val_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_val_full[i] = x + noise
+    X_val = torch.from_numpy(dspl_val_full).float()
+    del dspl_val_full
+
+    trac_val_sets = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
+    trac_val_full = np.moveaxis(np.concatenate([trac_val_sets[i] for i in range(trac_val_sets.shape[0])], axis=0), 3, 1)
+    del trac_val_sets
+    Y_val = torch.from_numpy(trac_val_full).float()
+    del trac_val_full
+    val_dataset = TensorDataset(X_val.float(), Y_val)
+    del X_val, Y_val
+
+    dataloader_kwargs = {'num_workers': args.num_workers, 'pin_memory': args.use_cuda, 'shuffle': True}
+    dataloaders = {'train': DataLoader(train_dataset, batch_size=args.batch_size, **dataloader_kwargs),
+                   'val': DataLoader(val_dataset, batch_size=args.batch_size, **dataloader_kwargs)}
+
+    # Create model
+    vit_model = vit.VisionTransformerProb(dspl_size=104,
+                                          patch_size=8,
+                                          embed_dim=128,
+                                          depth=4,
+                                          n_heads=4,
+                                          mlp_ratio=1.,
+                                          p=0.1,
+                                          attn_p=0.1,
+                                          drop_path=0.).float()
+
+    n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
+    print(f"Number of model parameters to optimize: {n_params}")
+
+    # Specify device
+    if args.use_cuda:
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+    print(f"Running on device: {device}")
+
+    # Loss and optimizer
+    loss = torch.nn.GaussianNLLLoss()
+    optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=250, gamma=0.1, last_epoch=-1)
+    layout = {
+        "Plot": {
+            "NLL": ["Multiline", ["NLL/train", "NLL/validation"]]
+        },
+    }
+
+    if args.continue_training:
+        NAME = ''
+        writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
+        checkpoint = torch.load(f'logs_and_weights/{NAME}/{NAME}.pth')
+        vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
+        vit_model.to(device)
+        optimizer.load_state_dict(checkpoint['final_optimizer_state_dict'])
+        event_acc = EventAccumulator(f'logs_and_weights/{NAME}')
+        event_acc.Reload()
+        global_step = event_acc.Scalars(tag='train_GNLL')[-1].step
+
+    else:
+        NAME = "Prob-ViT_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
+        writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
+        global_step = 0
+        checkpoint = None
+
+    fit(vit_model,
+        loss,
+        dataloaders,
+        optimizer,
+        device,
+        writer,
+        NAME,
+        args.epochs,
+        args.patience,
+        global_step,
+        checkpoint=checkpoint,
+        scheduler=scheduler)
+
+    writer.flush()
+    writer.close()
+
+
+def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs, patience, global_step, checkpoint=None, scheduler=None):
+    if checkpoint is not None:
+        best_val_nll = checkpoint['best_val_nll']
+        best_epoch = checkpoint['best_epoch']
+        best_model_weights = checkpoint['best_model_weights']
+    else:
+        best_val_nll = np.inf
+        best_epoch = 0
+        best_model_weights = None
+
+    model.to(device)
+    example_input, example_value = next(iter(dataloaders['train']))
+    writer.add_graph(model, example_input.to(device))
+
+    for epoch in range(1, max_epochs + 1):
+        train_nll, train_mse = run_epoch(model, loss_fn, dataloaders['train'], device, epoch + global_step, optimizer, train=True)
+        val_nll, val_mse = run_epoch(model, loss_fn, dataloaders['val'], device, epoch + global_step, optimizer=None, train=False)
+        if scheduler is not None:
+            scheduler.step()
+
+        writer.add_scalar('train_GNLL', train_nll, epoch + global_step)
+        writer.add_scalar('train_MSE', train_mse, epoch + global_step)
+        writer.add_scalar('val_GNLL', val_nll, epoch + global_step)
+        writer.add_scalar('val_MSE', val_mse, epoch + global_step)
+        writer.add_scalar('NLL/train', train_nll, epoch + global_step)
+        writer.add_scalar('NLL/val', val_nll, epoch + global_step)
+
+        # Save best weights.
+        if val_nll < best_val_nll:
+            best_val_nll = val_nll
+            best_epoch = epoch + global_step
+            best_model_weights = model.state_dict()
+
+        print(
+            '\n'
+            f"Epoch: {epoch + global_step}/{max_epochs + global_step}" '\n'
+            f"train nll: {np.round(train_nll, 12)}" '\n'
+            f"train mse: {np.round(train_mse, 12)}" '\n'
+            f"val nll: {np.round(val_nll, 12)}" '\n'
+            f"val mse: {np.round(val_mse, 12)}" '\n'
+            f"best_val_nll: {np.round(best_val_nll, 12)}" '\n'
+            f"epoch: {epoch + global_step}, best_epoch: {best_epoch}" '\n'
+            f"current patience: {patience - ((epoch + global_step) - best_epoch)}" '\n'
+        )
+
+        # Early stopping.
+        if patience - (epoch + global_step - best_epoch) < 0:
+            break
+
+        torch.save({'best_val_nll': best_val_nll,
+                    'best_epoch': best_epoch,
+                    'best_model_weights': best_model_weights,
+                    'final_model_weights': model.state_dict(),
+                    'final_optimizer_state_dict': optimizer.state_dict()
+                    }, f'logs_and_weights/{NAME}/{NAME}.pth')
+
+
+def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters_to_accumulate=1):
+    # Set model to training mode
+    epoch_loss = 0.
+    epoch_mean_squared_error = 0.
+    mse = torch.nn.MSELoss()
+
+    if train:
+        model.train()
+
+        if str(device) == 'cuda':
+            print("using cuda")
+            scaler = torch.cuda.amp.GradScaler(enabled=True)
+            with tqdm(dataloader, unit="batch") as tepoch:
+                for i, (xb, yb) in enumerate(tepoch):
+                    tepoch.set_description(f"Epoch {epoch}")
+                    xb = xb.to(device, non_blocking=True)
+                    yb = yb.to(device, non_blocking=True)
+
+                    with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
+                        output = model(xb)
+                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2], 0.45)
+                        gaussian_loss = loss_fn(output[:, 0:2], yb[:, 0:2], output[:, 2:])
+                        loss = loss / iters_to_accumulate
+                        mean_squared_error = mse(output[:, 0:2], yb[:, 0:2])
+
+                    # Accumulates scaled gradients.
+                    scaler.scale(loss).backward()
+
+                    if (i + 1) % iters_to_accumulate == 0 or (i + 1) == len(dataloader):
+                        # Gradient clipping.
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0, norm_type=2)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad(set_to_none=True)
+
+                    # statistics
+                    epoch_loss += gaussian_loss.item() * xb.size(0)
+                    epoch_mean_squared_error += mean_squared_error.item() * xb.size()[0]
+
+                epoch_loss /= len(dataloader.sampler)
+                epoch_mean_squared_error /= len(dataloader.sampler)
+                tepoch.set_postfix(loss=epoch_loss)
+                sleep(0.01)
+        else:
+            print("using cpu")
+            with tqdm(dataloader, unit="batch") as tepoch:
+                for i, (xb, yb) in enumerate(tepoch):
+                    tepoch.set_description(f"Epoch {epoch}")
+
+                    xb = xb.to(device, non_blocking=True)
+                    yb = yb.to(device, non_blocking=True)
+
+                    with torch.autocast(device_type='cpu', enabled=True):
+                        output = model(xb)
+                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2], 0.45)
+
+                    # Gradient clipping.
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0, norm_type=2)
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+                    # statistics
+                    epoch_loss += loss.item() * xb.size(0)
+
+                epoch_loss /= len(dataloader.sampler)
+                tepoch.set_postfix(loss=epoch_loss)
+                sleep(0.01)
+
+    else:
+        model.eval()
+        with tqdm(dataloader, unit="batch") as tepoch:
+            # Iterate over data
+            for xb, yb in tepoch:
+                tepoch.set_description(f"Epoch {epoch}")
+
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+
+                # forward
+                with torch.set_grad_enabled(train):
+                    output = model(xb, return_attention=False)
+                    gaussian_loss = loss_fn(output[:, 0:2], yb[:, 0:2], output[:, 2:])
+                    mean_squared_error = mse(output[:, 0:2], yb[:, 0:2])
+
+                # statistics
+                epoch_loss += gaussian_loss.item() * xb.size(0)
+                epoch_mean_squared_error += mean_squared_error.item() * xb.size(0)
+
+            epoch_loss /= len(dataloader.sampler)
+            epoch_mean_squared_error /= len(dataloader.sampler)
+            tepoch.set_postfix(loss=epoch_loss)
+            sleep(0.01)
+
+    return epoch_loss, epoch_mean_squared_error
+
+
+def beta_nll_loss(mean, variance, target, beta=0.5):
+    """Implementation of beta-NLL as in https://github.com/martius-lab/beta-nll
+
+    :param mean: Predicted mean of shape B x D
+    :param variance: Predicted variance of shape B x D
+    :param target: Target of shape B x D
+    :param beta: Parameter from range [0, 1] controlling relative
+        weighting between data points, where `0` corresponds to
+        high weight on low error points and `1` to an equal weighting.
+    :returns: Loss per batch element of shape B
+    """
+    loss = 0.5 * ((target - mean) ** 2 / variance + variance.log())
+
+    if beta > 0:
+        loss = loss * (variance.detach() ** beta)
+
+    return torch.mean(loss)
+
+
+if __name__ == '__main__':
+    execute()
