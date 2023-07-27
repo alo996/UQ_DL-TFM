@@ -23,14 +23,14 @@ def execute():
                         help='input batch size for training')
     parser.add_argument('--val_batch_size', type=int, default=8,
                         help='input batch size for validation')
-    parser.add_argument('--epochs', type=int, default=1000,
+    parser.add_argument('--epochs', type=int, default=5000,
                         help='Number of epochs to train')
     parser.add_argument('--patience', type=int, default=50,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.0001,
+    parser.add_argument('--lr', type=float, default=0.001,
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
@@ -41,7 +41,7 @@ def execute():
                         help='random seed')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=False,
                         help='optimize multi-task objective')
@@ -171,11 +171,17 @@ def execute():
     # Loss and optimizer
     loss = torch.nn.GaussianNLLLoss()
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=250, gamma=0.1, last_epoch=-1)
+    layout = {
+        "Plot": {
+            "NLL": ["Multiline", ["NLL/train", "NLL/validation"]]
+        },
+    }
 
     if args.continue_training:
-        NAME = 'ViT-GNLL_2023-Apr-14 18:30:28'
+        NAME = 'ViT-GNLL_final_2023-Apr-14 18:30:28'
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
         checkpoint = torch.load(f'logs_and_weights/{NAME}/{NAME}.pth')
         vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
         vit_model.to(device)
@@ -185,8 +191,9 @@ def execute():
         global_step = event_acc.Scalars(tag='train_GNLL')[-1].step
 
     else:
-        NAME = "ViT-GNLL_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
+        NAME = "ViT-GNLL_final{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
         global_step = 0
         checkpoint = None
 
@@ -201,7 +208,7 @@ def execute():
         args.patience,
         global_step,
         checkpoint=checkpoint,
-        scheduler=None)
+        scheduler=scheduler)
 
     writer.flush()
     writer.close()
@@ -231,6 +238,8 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
         writer.add_scalar('train_MSE', train_mse, epoch + global_step)
         writer.add_scalar('val_GNLL', val_nll, epoch + global_step)
         writer.add_scalar('val_MSE', val_mse, epoch + global_step)
+        writer.add_scalar('NLL/train', train_nll, epoch + global_step)
+        writer.add_scalar('NLL/val', val_nll, epoch + global_step)
 
         # Save best weights.
         if val_nll < best_val_nll:
@@ -282,7 +291,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
 
                     with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
                         output = model(xb)
-                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2])
+                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2], 0.45)
                         gaussian_loss = loss_fn(output[:, 0:2], yb[:, 0:2], output[:, 2:])
                         loss = loss / iters_to_accumulate
                         mean_squared_error = mse(output[:, 0:2], yb[:, 0:2])
@@ -293,7 +302,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                     if (i + 1) % iters_to_accumulate == 0 or (i + 1) == len(dataloader):
                         # Gradient clipping.
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0, norm_type=2)
                         scaler.step(optimizer)
                         scaler.update()
                         optimizer.zero_grad(set_to_none=True)
@@ -317,11 +326,11 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
 
                     with torch.autocast(device_type='cpu', enabled=True):
                         output = model(xb)
-                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2])
+                        loss = beta_nll_loss(output[:, 0:2], output[:, 2:], yb[:, 0:2], 0.45)
 
                     # Gradient clipping.
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0, norm_type=2)
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
 

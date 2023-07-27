@@ -175,7 +175,7 @@ def start_data_generator(resolution, samples_per_generator, num_generator, use):
                                         'num_generator': num_generator})
         Gen.generate(samples_per_generator)
     elif use == 'test':
-        np.random.seed(200 + num_generator)
+        np.random.seed(300 + num_generator)
         Gen = AnalyticalEventGenerator({'resolutionX': resolution,
                                         'resolutionY': resolution,
                                         'traction_min': 0,
@@ -186,28 +186,28 @@ def start_data_generator(resolution, samples_per_generator, num_generator, use):
 
 
 def aggregate_dspl_hdf5_files(resolution):
-    with h5py.File(f"Training data/resolution_{resolution}/3750/allDisplacements.h5", "w") as f_dst:
-        h5files = [f for f in os.listdir(f'Training data/resolution_{resolution}/3750') if f.startswith("dspl")]
+    with h5py.File(f"Test data/resolution_{resolution}/allDisplacements_final.h5", "w") as f_dst:
+        h5files = [f for f in os.listdir(f'Test data/resolution_{resolution}') if f.startswith("dspl")]
         h5files.sort()
 
-        dset = f_dst.create_dataset("dspl", shape=(20, 3750, resolution, resolution, 2), dtype='f8')
+        dset = f_dst.create_dataset("dspl", shape=(10, 10, resolution, resolution, 2), dtype='f8')
 
         for i, filename in enumerate(h5files):
             print(filename)
-            with h5py.File(f'Training data/resolution_{resolution}/3750/{filename}') as f_src:
+            with h5py.File(f'Test data/resolution_{resolution}/{filename}') as f_src:
                 dset[i] = f_src["data"]
 
 
 def aggregate_trac_hdf5_files(resolution):
-    with h5py.File(f"Training data/resolution_{resolution}/3750/allTractions.h5", "w") as f_dst:
-        h5files = [f for f in os.listdir(f'Training data/resolution_{resolution}/3750') if f.startswith("trac")]
+    with h5py.File(f"Test data/resolution_{resolution}/allTractions_final.h5", "w") as f_dst:
+        h5files = [f for f in os.listdir(f'Test data/resolution_{resolution}') if f.startswith("trac")]
         h5files.sort()
 
-        dset = f_dst.create_dataset("trac", shape=(20, 3750, resolution, resolution, 3), dtype='f8')
+        dset = f_dst.create_dataset("trac", shape=(10, 10, resolution, resolution, 3), dtype='f8')
 
         for i, filename in enumerate(h5files):
             print(filename)
-            with h5py.File(f'Training data/resolution_{resolution}/3750/{filename}') as f_src:
+            with h5py.File(f'Test data/resolution_{resolution}/{filename}') as f_src:
                 dset[i] = f_src["data"]
 
 
@@ -215,11 +215,11 @@ def generate_data_in_parallel(resolution, samples, num_processes, use):
     pool = mp.Pool(processes=num_processes)
     samples_per_generator = samples // num_processes
     for i in range(1, num_processes + 1):
-        pool.apply_async(start_data_generator, args=(resolution, samples_per_generator, 20 + i, use))
+        pool.apply_async(start_data_generator, args=(resolution, samples_per_generator, i, use))
     pool.close()
     pool.join()
 
 
-#generate_data_in_parallel(resolution=104, samples=75000,  num_processes=20, use='training')
-#aggregate_dspl_hdf5_files(resolution=104)
+generate_data_in_parallel(resolution=104, samples=100,  num_processes=10, use='test')
+aggregate_dspl_hdf5_files(resolution=104)
 aggregate_trac_hdf5_files(resolution=104)

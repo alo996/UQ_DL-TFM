@@ -23,14 +23,14 @@ def execute():
                         help='input batch size for training')
     parser.add_argument('--val_batch_size', type=int, default=8,
                         help='input batch size for validation')
-    parser.add_argument('--epochs', type=int, default=1000,
+    parser.add_argument('--epochs', type=int, default=5000,
                         help='Number of epochs to train')
     parser.add_argument('--patience', type=int, default=50,
                         help='Early stopping.')
     parser.add_argument('--use_cuda', action='store_true', default=True,
                         help='Enables CUDA training')
     # Optimizer settings
-    parser.add_argument('--lr', type=float, default=0.0001,
+    parser.add_argument('--lr', type=float, default=0.001,
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
                         help='initial learning rate (default: 0.0005)')
@@ -41,7 +41,7 @@ def execute():
                         help='random seed')
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Number of data loading workers per GPU (default: 4')
-    parser.add_argument('--continue_training', type=bool, default=True,
+    parser.add_argument('--continue_training', type=bool, default=False,
                         help='continue training given a checkpoint')
     parser.add_argument('--use_multi_task', type=bool, default=False,
                         help='optimize multi-task objective')
@@ -59,14 +59,9 @@ def execute():
 
     # Prepare training and validation dataset
     # Train
-    # dspl_train_1 = np.array(h5py.File('../../data/Training data/resolution_104/3750/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-    dspl_train_2 = np.array(h5py.File('../../data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-    #dspl_train_1_full = np.moveaxis(np.concatenate([dspl_train_1[i] for i in range(dspl_train_1.shape[0])], axis=0), 3, 1)
-    # del dspl_train_1
+    dspl_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
     dspl_train_2_full = np.moveaxis(np.concatenate([dspl_train_2[i] for i in range(dspl_train_2.shape[0])], axis=0), 3, 1)
     del dspl_train_2
-    # dspl_train_full = np.vstack((dspl_train_1_full, dspl_train_2_full))
-    #del dspl_train_1_full, dspl_train_2_full
 
     sigma_bar = args.noise_percentage * np.mean(np.var(dspl_train_2_full, axis=(1, 2, 3)))
     print(f'percentage for noise level: {args.noise_percentage}')
@@ -78,27 +73,19 @@ def execute():
     X_train = torch.from_numpy(dspl_train_2_full).float()
     del dspl_train_2_full
     print(f'X_train_full.shape is {X_train.shape}')
-    # X_train_noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(X_train.shape[0], X_train.shape[2], X_train.shape[3])), (0, 3, 2, 1))
 
-    # trac_train_1 = np.array(h5py.File('../../data/Training data/resolution_104/3750/allTractions.h5', 'r')['trac'], dtype="float32")
-    trac_train_2 = np.array(h5py.File('../../data/Training data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
-    # trac_train_1_full = np.moveaxis(np.concatenate([trac_train_1[i] for i in range(trac_train_1.shape[0])], axis=0), 3, 1)
-    # del trac_train_1
+    trac_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
     trac_train_2_full = np.moveaxis(np.concatenate([trac_train_2[i] for i in range(trac_train_2.shape[0])], axis=0), 3, 1)
     del trac_train_2
-    # del trac_train_2
-    # trac_train_full = np.vstack((trac_train_1_full, trac_train_2_full))
-    # del trac_train_1_full, trac_train_2_full
     Y_train = torch.from_numpy(trac_train_2_full).float()
     del trac_train_2_full
-    #print('getting serious')
     train_dataset = TensorDataset(X_train.float(), Y_train)
     del X_train, Y_train
     print("Train set ready")
 
     # Val
-    dspl_val = np.array(h5py.File('../../data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-    trac_val = np.array(h5py.File('../../data/Validation data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
+    dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
+    trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
     dspl_val_full = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
     del dspl_val
     trac_val_full = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
@@ -117,34 +104,6 @@ def execute():
     del trac_val_full
     val_dataset = TensorDataset(X_val.float(), Y_val)
     del X_val, Y_val
-
-    '''
-    dspl_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-    dspl_train = np.moveaxis(np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0), 3, 1)
-    X_train = torch.from_numpy(dspl_train).float()
-    del dspl_train
-    trac_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
-    trac_train = np.moveaxis(np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0), 3, 1)
-    Y_train = torch.from_numpy(trac_train).float()
-    del trac_train
-    train_dataset = TensorDataset(X_train, Y_train)
-    print(f'X_train.shape is {X_train.shape}')
-    print(f'Y_train.shape is {Y_train.shape}')
-    del X_train, Y_train
-
-    dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-    dspl_val = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
-    X_val = torch.from_numpy(dspl_val).float()
-    del dspl_val
-    trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
-    trac_val = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
-    Y_val = torch.from_numpy(trac_val).float()
-    del trac_val
-    val_dataset = TensorDataset(X_val, Y_val)
-    print(f'X_val.shape is {X_val.shape}')
-    print(f'Y_val.shape is {Y_val.shape}')
-    del X_val, Y_val
-    '''
 
     dataloader_kwargs = {'num_workers': args.num_workers, 'pin_memory': args.use_cuda, 'shuffle': True}
     dataloaders = {'train': DataLoader(train_dataset, batch_size=args.batch_size, **dataloader_kwargs),
@@ -179,12 +138,14 @@ def execute():
         vit_model = vit.VisionTransformer(dspl_size=104,
                                           patch_size=8,
                                           embed_dim=128,
-                                          depth=4,
+                                          depth=6,
                                           n_heads=4,
-                                          mlp_ratio=1.,
-                                          p=0.05,
-                                          attn_p=0.05,
+                                          mlp_ratio=1.0,
+                                          qkv_bias=False,
+                                          p=0.1,
+                                          attn_p=0.1,
                                           drop_path=0.).float()
+
 
     n_params = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
     print(f"Number of model parameters to optimize: {n_params}")
@@ -199,11 +160,17 @@ def execute():
     # Loss and optimizer
     loss = torch.nn.MSELoss()
     optimizer = torch.optim.AdamW(vit_model.parameters(), lr=args.lr, weight_decay=args.weight_decay, amsgrad=True)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=250, gamma=0.5)
+    layout = {
+        "Plot": {
+            "loss": ["Multiline", ["loss/train", "loss/validation"]]
+        },
+    }
 
     if args.continue_training:
-        NAME = 'ViT-clean_2023-Feb-26 22:41:48'
+        NAME = 'ViT-final_2023-May-16 19:56:24'
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
         checkpoint = torch.load(f'logs_and_weights/{NAME}/{NAME}.pth')
         vit_model.load_state_dict(checkpoint['final_model_weights'], strict=True)
         vit_model.to(device)
@@ -213,8 +180,9 @@ def execute():
         global_step = event_acc.Scalars(tag='train_loss')[-1].step
 
     else:
-        NAME = "ViT-clean_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
+        NAME = "ViT-final_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
+        writer.add_custom_scalars(layout)
         global_step = 0
         checkpoint = None
 
@@ -229,7 +197,7 @@ def execute():
         args.patience,
         global_step,
         checkpoint=checkpoint,
-        scheduler=None)
+        scheduler=scheduler)
 
     writer.flush()
     writer.close()
@@ -250,13 +218,16 @@ def fit(model, loss_fn, dataloaders, optimizer, device, writer, NAME, max_epochs
     writer.add_graph(model, example_input.to(device))
 
     for epoch in range(1, max_epochs + 1):
-        train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch + global_step, optimizer, train=True)
-        val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch + global_step, optimizer=None, train=False)
+        train_loss = run_epoch(model, loss_fn, dataloaders['train'], device, epoch + global_step, optimizer, train=True, iters_to_accumulate=1)
+        val_loss = run_epoch(model, loss_fn, dataloaders['val'], device, epoch + global_step, optimizer=None, train=False, iters_to_accumulate=1)
         if scheduler is not None:
+            print(f"Learning rate: {scheduler.get_last_lr()}")
             scheduler.step()
 
         writer.add_scalar('train_loss', train_loss, epoch + global_step)
         writer.add_scalar('val_loss', val_loss, epoch + global_step)
+        writer.add_scalar('loss/train', train_loss, epoch + global_step)
+        writer.add_scalar('loss/validation', val_loss, epoch + global_step)
 
         # Save best weights.
         if val_loss < best_val_loss:
@@ -329,7 +300,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                     if (i + 1) % iters_to_accumulate == 0 or (i + 1) == len(dataloader):
                         # Gradient clipping.
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
                         scaler.step(optimizer)
                         scaler.update()
                         optimizer.zero_grad(set_to_none=True)
@@ -355,7 +326,7 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
 
                     # Gradient clipping.
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
 
@@ -380,12 +351,6 @@ def run_epoch(model, loss_fn, dataloader, device, epoch, optimizer, train, iters
                 with torch.set_grad_enabled(train):
                     output = model(xb, return_attention=False)
                     loss = loss_fn(output, yb[:, 0:2])
-
-                    # backward + optimize if in training phase
-                    if train:
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
-                        optimizer.step()
 
                 # statistics
                 epoch_loss += loss.item() * xb.size(0)

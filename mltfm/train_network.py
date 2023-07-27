@@ -1,3 +1,4 @@
+import keras.optimizers.optimizer_v1
 from keras.layers import Input, Conv2D, MaxPooling2D, Dropout, BatchNormalization, Activation, Conv2DTranspose, Concatenate, LeakyReLU
 from keras.models import Model, load_model
 from keras.losses import MeanSquaredError
@@ -69,85 +70,96 @@ def get_unet(input_img, n_filters=10, dropout=0.1, batchnorm=True):
 
 # Prepare training and validation dataset
 # Train
-
+np.random.seed(1)
+tf.random.set_seed(1)
 noise_percentage = 0.005
-dspl_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-dspl_train_2_full = np.concatenate([dspl_train_2[i] for i in range(dspl_train_2.shape[0])], axis=0)
-del dspl_train_2
 
-sigma_bar = noise_percentage * np.mean(np.var(dspl_train_2_full, axis=(1, 2, 3)))
-print(f'percentage for noise level: {noise_percentage}')
-print(f'sigma_bar: {sigma_bar}')
-cov = [[sigma_bar, 0], [0, sigma_bar]]
-for i, x in tqdm.tqdm(enumerate(dspl_train_2_full), desc='noised'):
-    noise = np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104))
-    dspl_train_2_full[i] = x + noise
-print(f'dspl_train_2_full.shape is {dspl_train_2_full.shape}')
-trac_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
-trac_train_2_full = np.concatenate([trac_train_2[i] for i in range(trac_train_2.shape[0])], axis=0)
-del trac_train_2
+with tf.device("CPU"):
+    dspl_train = np.array(h5py.File(
+        '/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    dspl_train_full = np.moveaxis(np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0), 3, 1)
+    del dspl_train
 
-# Val
-dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5', 'r')['trac'], dtype="float32")
-dspl_val_full = np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0)
-del dspl_val
-trac_val_full = np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0)
-del trac_val
+    sigma_bar = noise_percentage * np.mean(np.var(dspl_train_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {noise_percentage}')
+    print(f'sigma_bar: {sigma_bar}')
+    cov = [[sigma_bar, 0], [0, sigma_bar]]
+    for i, x in tqdm.tqdm(enumerate(dspl_train_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_train_full[i] = x + noise
+    X_train = np.moveaxis(dspl_train_full, 1, 3)
+    print(f'X_train_full.shape is {X_train.shape}')
 
-sigma_bar_val = noise_percentage * np.mean(np.var(dspl_val_full, axis=(1, 2, 3)))
-print(f'percentage for noise level: {noise_percentage}')
-print(f'sigma_bar_val: {sigma_bar_val}')
-cov = [[sigma_bar_val, 0], [0, sigma_bar_val]]
-for i, x in tqdm.tqdm(enumerate(dspl_val_full), desc='noised'):
-    noise = np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104))
-    dspl_val_full[i] = x + noise
-'''
+    trac_train = np.array(
+        h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
+    trac_train_full = np.moveaxis(np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0), 3, 1)
+    del trac_train
+    Y_train = np.moveaxis(trac_train_full, 1, 3)
+    print(f'Y_train_full.shape is {Y_train.shape}')
 
-dspl_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-dspl_train = np.concatenate([dspl_train[i] for i in range(dspl_train.shape[0])], axis=0)
-trac_train = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
-trac_train = np.concatenate([trac_train[i] for i in range(trac_train.shape[0])], axis=0)
-print(f'X_train.shape is {dspl_train.shape}')
-print(f'Y_train.shape is {trac_train.shape}')
 
-dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
-dspl_val = np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0)
-trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5','r')['trac'], dtype="float32")
-trac_val = np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0)
-print(f'dspl_val.shape is {dspl_val.shape}')
-print(f'trac_val.shape is {trac_val.shape}')
-'''
+    dspl_val = np.array(h5py.File(
+        '/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allDisplacements.h5', 'r')['dspl'], dtype="float32")
+    trac_val = np.array(
+        h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/allTractions.h5',
+                  'r')['trac'], dtype="float32")
+    dspl_val_full = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
+    del dspl_val
+    trac_val_full = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
+    del trac_val
 
-#input_img = Input(shape=(104, 104, 2))
-#unet = get_unet(input_img)
+    sigma_bar_val = noise_percentage * np.mean(np.var(dspl_val_full, axis=(1, 2, 3)))
+    print(f'percentage for noise level: {noise_percentage}')
+    print(f'sigma_bar_val: {sigma_bar_val}')
+    cov = [[sigma_bar_val, 0], [0, sigma_bar_val]]
+    for i, x in tqdm.tqdm(enumerate(dspl_val_full), desc='noised'):
+        noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
+        dspl_val_full[i] = x + noise
+    X_val = np.moveaxis(dspl_val_full, 1, 3)
+    Y_val = np.moveaxis(trac_val_full, 1, 3)
+    print(f'_val.shape is {Y_val.shape}')
+
+input_img = Input(shape=(104, 104, 2))
+unet = get_unet(input_img)
 config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth = True
 sess = tf.compat.v1.Session(config=config)
 
-#policy = mixed_precision.Policy('mixed_float16')
-#mixed_precision.set_global_policy(policy)
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
 
 with tf.device("CPU"):
-    train = tf.data.Dataset.from_tensor_slices((dspl_train_2_full, trac_train_2_full[:,:,:,0:2])).batch(8)
-    validate = tf.data.Dataset.from_tensor_slices((dspl_val_full, trac_val_full[:,:,:,0:2])).batch(8)
+    train = tf.data.Dataset.from_tensor_slices((X_train, Y_train[:, :, :, 0:2]))
+    train = train.shuffle(buffer_size=2 * 132)
+    train = train.batch(batch_size=132)
+    validate = tf.data.Dataset.from_tensor_slices((X_val, Y_val[:, :, :, 0:2])).batch(batch_size=132)
 
-loaded_model = load_model('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/CNN_noisy-2023-Mar-21 16:57:44.h5')
-#unet.compile(optimizer=Adagrad(), loss=MeanSquaredError())
-#print(unet.summary())
+#loaded_model = load_model('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm/CNN_noisy-2023-Mar-21 16:57:44.h5')
+unet.compile(optimizer=Adagrad(), loss=MeanSquaredError())
+print(unet.summary())
 
-checkpoint_filepath = 'CNN_noisy-{:%Y-%b-%d %H:%M:%S}_checkpoint.h5'.format(datetime.now())
+#optimizer=tf.keras.optimizers.Adam(amsgrad=True, global_clipnorm=0.9, learning_rate=5e-3, weight_decay=5e-4)
+
+checkpoint_filepath = 'CNN_noisy_final-{:%Y-%b-%d %H:%M:%S}_checkpoint.h5'.format(datetime.now())
 model_checkpoint_callback = ModelCheckpoint(
     filepath=checkpoint_filepath,
     monitor='val_loss',
     save_best_only=True)
 early_stopping = EarlyStopping(monitor='val_loss', patience=50, verbose=1)
 
+#def scheduler(epoch, lr):
+#    if epoch % 250 == 0 and epoch > 1:
+#        print(f'new learning rate: {lr * 0.1}')
+#        return lr * 0.1
+#    else:
+#        return lr
 
-history = loaded_model.fit(train,
-                   epochs=2000,
-                   batch_size=1,
-                   shuffle=False,
+#scheduler_callback = tf.keras.callbacks.LearningRateScheduler(scheduler)
+
+history = unet.fit(train,
+                   epochs=5000,
+                   batch_size=132,
+                   shuffle=True,
                    validation_data=validate,
                    callbacks=[model_checkpoint_callback, TensorBoard(log_dir='logs'), early_stopping])
 
@@ -155,4 +167,4 @@ with open('history.pkl', 'wb') as f:
     pickle.dump(history.history, f, pickle.HIGHEST_PROTOCOL)
 
 NAME = "CNN_noisy-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
-loaded_model.save(f'{NAME}.h5')
+unet.save(f'{NAME}.h5')
