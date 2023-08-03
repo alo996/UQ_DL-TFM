@@ -17,7 +17,7 @@ import VisionTransformer_working_for_DPT as vit
 def execute():
     # Training settings
     parser = argparse.ArgumentParser(description='TFM-ViT')
-    parser.add_argument('--noise_percentage', type=float, default=0.005,
+    parser.add_argument('--noise_percentage', type=float, default=0.5,
                         help='Percentage to multiply average variance over all training displacement fields with')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='input batch size for training')
@@ -59,49 +59,52 @@ def execute():
 
     # Prepare training and validation dataset
     # Train
-    dspl_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
-    dspl_train_2_full = np.moveaxis(np.concatenate([dspl_train_2[i] for i in range(dspl_train_2.shape[0])], axis=0), 3, 1)
-    del dspl_train_2
+    #dspl_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
+    #dspl_train_2_full = np.moveaxis(np.concatenate([dspl_train_2[i] for i in range(dspl_train_2.shape[0])], axis=0), 3, 1)
+    #del dspl_train_2
 
-    sigma_bar = args.noise_percentage * np.mean(np.var(dspl_train_2_full, axis=(1, 2, 3)))
+    dspl = np.moveaxis(np.load('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm_new/data/train/displacements.npy'), 3, 1)
+    sigma_bar = args.noise_percentage * np.mean(np.var(dspl, axis=(1, 2, 3)))
     print(f'percentage for noise level: {args.noise_percentage}')
     print(f'sigma_bar: {sigma_bar}')
     cov = [[sigma_bar, 0], [0, sigma_bar]]
-    for i, x in tqdm(enumerate(dspl_train_2_full), desc='noised'):
+    for i, x in tqdm(enumerate(dspl), desc='noised'):
         noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
-        dspl_train_2_full[i] = x + noise
-    X_train = torch.from_numpy(dspl_train_2_full).float()
-    del dspl_train_2_full
+        dspl[i] = x + noise
+    X_train = torch.from_numpy(dspl).float()
+    del dspl
     print(f'X_train_full.shape is {X_train.shape}')
 
-    trac_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
-    trac_train_2_full = np.moveaxis(np.concatenate([trac_train_2[i] for i in range(trac_train_2.shape[0])], axis=0), 3, 1)
-    del trac_train_2
-    Y_train = torch.from_numpy(trac_train_2_full).float()
-    del trac_train_2_full
+    #trac_train_2 = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Training data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
+   # trac_train_2_full = np.moveaxis(np.concatenate([trac_train_2[i] for i in range(trac_train_2.shape[0])], axis=0), 3, 1)
+    #del trac_train_2
+
+    trac = np.moveaxis(np.load('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm_new/data/train/tractions.npy'), 3, 1)
+    Y_train = torch.from_numpy(trac).float()
+    del trac
     train_dataset = TensorDataset(X_train.float(), Y_train)
     del X_train, Y_train
     print("Train set ready")
 
     # Val
-    dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
-    trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
-    dspl_val_full = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
-    del dspl_val
-    trac_val_full = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
-    del trac_val
+    #dspl_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allDisplacements_final_max5000.h5', 'r')['dspl'], dtype="float32")
+    dspl_val = np.moveaxis(np.load('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm_new/data/validation/displacements.npy'), 3, 1)
+    #trac_val = np.array(h5py.File('/home/alexrichard/PycharmProjects/UQ_DL-TFM/ViT-TFM/data/Validation data/resolution_104/max5000/allTractions_final_max5000.h5', 'r')['trac'], dtype="float32")
+    trac_val = np.moveaxis(np.load('/home/alexrichard/PycharmProjects/UQ_DL-TFM/mltfm_new/data/validation/tractions.npy'), 3, 1)
+    #dspl_val_full = np.moveaxis(np.concatenate([dspl_val[i] for i in range(dspl_val.shape[0])], axis=0), 3, 1)
+    #del dspl_val
+    #trac_val_full = np.moveaxis(np.concatenate([trac_val[i] for i in range(trac_val.shape[0])], axis=0), 3, 1)
+    #del trac_val
 
-    sigma_bar_val = args.noise_percentage * np.mean(np.var(dspl_val_full, axis=(1, 2, 3)))
+    sigma_bar_val = args.noise_percentage * np.mean(np.var(dspl_val, axis=(1, 2, 3)))
     print(f'percentage for noise level: {args.noise_percentage}')
     print(f'sigma_bar_val: {sigma_bar_val}')
     cov = [[sigma_bar_val, 0], [0, sigma_bar_val]]
-    for i, x in tqdm(enumerate(dspl_val_full), desc='noised'):
+    for i, x in tqdm(enumerate(dspl_val), desc='noised'):
         noise = np.transpose(np.random.default_rng().multivariate_normal(mean=[0, 0], cov=cov, size=(104, 104)))
-        dspl_val_full[i] = x + noise
-    X_val = torch.from_numpy(dspl_val_full).float()
-    del dspl_val_full
-    Y_val = torch.from_numpy(trac_val_full).float()
-    del trac_val_full
+        dspl_val[i] = x + noise
+    X_val = torch.from_numpy(dspl_val).float()
+    Y_val = torch.from_numpy(trac_val).float()
     val_dataset = TensorDataset(X_val.float(), Y_val)
     del X_val, Y_val
 
@@ -180,7 +183,7 @@ def execute():
         global_step = event_acc.Scalars(tag='train_loss')[-1].step
 
     else:
-        NAME = "ViT-final_{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
+        NAME = "ViT-final_noise:0.5{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
         writer = SummaryWriter(log_dir=f'logs_and_weights/{NAME}')
         writer.add_custom_scalars(layout)
         global_step = 0

@@ -1,4 +1,3 @@
-import keras.optimizers.optimizer_v1
 from keras.layers import Input, Conv2D, MaxPooling2D, Dropout, BatchNormalization, Activation, Conv2DTranspose, Concatenate, LeakyReLU
 from keras.models import Model, load_model
 from keras.losses import MeanSquaredError
@@ -67,7 +66,7 @@ def get_unet(input_img, n_filters=10, dropout=0.1, batchnorm=True):
     model = Model(inputs=[input_img], outputs=[outputs])
     return model
 
-
+'''
 # Prepare training and validation dataset
 # Train
 np.random.seed(1)
@@ -168,3 +167,5 @@ with open('history.pkl', 'wb') as f:
 
 NAME = "CNN_noisy-{:%Y-%b-%d %H:%M:%S}".format(datetime.now())
 unet.save(f'{NAME}.h5')
+'''
+

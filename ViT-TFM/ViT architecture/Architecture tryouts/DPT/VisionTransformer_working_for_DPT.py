@@ -437,10 +437,10 @@ class VisionTransformer(nn.Module):
             Predicted traction fields, shape `(n_samples, 2, dspl_size, dspl_size)`
         """
         x = self.patch_embed(x)
-        #if interpolate:
-        #    embed = interpolate_pos_embeddings(pos_embed=self.pos_embed, src_size=src_size, tgt_size=tgt_size)
-        #else:
-        embed = self.pos_embed
+        if interpolate:
+            embed = interpolate_pos_embeddings(pos_embed=self.pos_embed, src_size=src_size, tgt_size=tgt_size)
+        else:
+            embed = self.pos_embed
         x = x + embed  # (n_samples, n_patches, embed_dim)
         x = self.pos_drop(x)
 
